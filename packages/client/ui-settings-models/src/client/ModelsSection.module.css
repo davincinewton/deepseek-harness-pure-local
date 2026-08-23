@@ -269,6 +269,26 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* A one-line capability switch, unlike the stacked `.field` above: the box
+   and its label share a row, as the fetch dialog's candidate rows do. */
+.checkboxField {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.checkboxField:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.checkboxLabel {
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+}
+
 .linkButton {
   box-sizing: border-box;
   display: inline-flex;

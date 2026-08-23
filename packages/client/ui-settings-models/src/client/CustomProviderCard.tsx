@@ -14,6 +14,16 @@
  * and at least one model — are required here rather than at load, so the
  * failure names the field while the user is still looking at it.
  *
+ * One capability IS offered as a provider-scoped switch: **vision enabled**.
+ * A hand-declared route has no installed catalog entries, so its models take
+ * their modalities from the profile's `defaultInput` alone — the adapter's
+ * fallback claims text only, and nothing can interrogate a gateway for what
+ * it accepts. The switch declares `[text, image]` once for every model on the
+ * route; unchecking it (the default) keeps the text-only claim, which is the
+ * safe side of a wrong answer: an under-claimed model refuses the image before
+ * it is attached, while an over-claimed one fails mid-turn after the message
+ * is durable.
+ *
  * There is deliberately no reasoning-effort control, here or on the editor
  * card: effort is a per-MODEL capability, and the models under one provider
  * disagree about it, so a provider-scoped control can only be set to a value
@@ -82,6 +92,10 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   const [displayName, setDisplayName] = useState('')
   const [baseURL, setBaseURL] = useState('')
   const [protocol, setProtocol] = useState(protocols[0] ?? '')
+  // Off by default: the adapter's own fallback claims text only, and a
+  // hand-declared gateway that does not serve images must be refused before
+  // the image is attached, not mid-turn.
+  const [vision, setVision] = useState(false)
   const [keyDraft, setKeyDraft] = useState('')
   const [models, setModels] = useState<readonly ModelDraft[]>([])
   const [busy, setBusy] = useState(false)
@@ -142,6 +156,10 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         ...storesKey ? { apiKeyEnv: keyRef } : {},
         api: protocol,
         baseURL,
+        // Declared once at the route: a hand-declared model has no catalog
+        // entry of its own, so its modalities resolve from here. Omission is
+        // not "text" spelled out — it is the adapter's fallback itself.
+        ...vision ? { defaultInput: ['text', 'image'] } : {},
         models: models.map(model => ({ ...model })),
       }
       const response = await api.settings.mutate({
@@ -245,6 +263,18 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
           {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
         </select>
       </div>
+      {/* A capability claim, not a field to fill: one line, checked only when
+          the endpoint really serves images. */}
+      <label className={styles['checkboxField']}>
+        <input
+          type="checkbox"
+          checked={vision}
+          aria-label={t('visionEnabled')}
+          disabled={profileDisabled}
+          onChange={(event) => { setVision(event.target.checked) }}
+        />
+        <span className={styles['checkboxLabel']}>{t('visionEnabled')}</span>
+      </label>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('keyInput')}</span>
         <input

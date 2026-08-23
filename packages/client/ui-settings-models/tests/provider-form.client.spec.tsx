@@ -708,6 +708,42 @@ describe('hand-declared providers', () => {
     expect(set).toHaveBeenCalledWith({ ref: 'ACME_GATEWAY_API_KEY', value: 'gw-key' })
   })
 
+  it('declares image input for the whole route when vision is switched on', async () => {
+    const { mutate, onClose } = mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme-gateway' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://gateway.acme.example/v1' } })
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'acme-large' } })
+    fireEvent.click(screen.getByLabelText(en.visionEnabled))
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    // A hand-declared model has no catalog entry of its own, so the route's
+    // defaultInput is the only modality claim its models can resolve from.
+    expect(firstMutate(mutate).ops[0]?.value).toMatchObject({
+      defaultInput: ['text', 'image'],
+      models: [{ id: 'acme-large' }],
+    })
+  })
+
+  it('leaves the modality claim to the adapter fallback while the switch stays off', async () => {
+    const { mutate, onClose } = mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme-gateway' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://gateway.acme.example/v1' } })
+    expect((screen.getByLabelText<HTMLInputElement>(en.visionEnabled)).checked).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'acme-large' } })
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    // Omission is not "text" spelled out: storing an explicit list would make
+    // the profile carry a claim the adapter already answers for.
+    const value = firstMutate(mutate).ops[0]?.value as Record<string, unknown>
+    expect(value).not.toHaveProperty('defaultInput')
+  })
+
   it('scopes each card to fields a provider can actually own', async () => {
     // Reasoning effort is a per-MODEL capability and the
     // models under one provider disagree about it, so a provider-scoped
@@ -719,7 +755,7 @@ describe('hand-declared providers', () => {
 
     mountCard()
     fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
-    expect(fields()).toEqual([en.customRoute, en.customDisplayName, en.baseUrl, en.customApi, en.keyInput])
+    expect(fields()).toEqual([en.customRoute, en.customDisplayName, en.baseUrl, en.customApi, en.visionEnabled, en.keyInput])
     cleanup()
 
     // A shipped route's models each carry their own protocol, so its editor
