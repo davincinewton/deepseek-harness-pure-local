@@ -404,12 +404,22 @@
     - id: web
       name: '@deepseek-ai/dsh-web'
       config:
-        searchProvider: deepseek-official
+        searchProvider: duckduckgo
 
     - id: web-search-deepseek
       name: '@deepseek-ai/dsh-web-search-deepseek'
       config:
         apiKeyEnv: DEEPSEEK_API_KEY
+
+    # DuckDuckGo is the default provider (the `web` seam above pins it). It needs no
+    # API key — its runner spawns the `ddgs` Python library — so web_search works out
+    # of the box. The DeepSeek route stays registered for users who set a key and opt
+    # in via `searchProvider: deepseek-official`; pinning here selects one provider,
+    # so no ambiguity is raised.
+    - id: web-search-ddgs
+      name: '@deepseek-ai/dsh-web-search-ddgs'
+      config:
+        defaultMaxResults: 10
 
     - id: tool-web
       name: '@deepseek-ai/dsh-tool-web'
