@@ -698,6 +698,8 @@ describe('hand-declared providers', () => {
           apiKeyEnv: 'ACME_GATEWAY_API_KEY',
           api: 'openai-completions',
           baseURL: 'https://gateway.acme.example/v1',
+          // The pre-filled route context fallback travels even when untouched.
+          defaultContextWindow: 200_000,
           models: [{ id: 'acme-large', contextWindow: 65_536 }],
         },
       }],
@@ -744,6 +746,46 @@ describe('hand-declared providers', () => {
     expect(value).not.toHaveProperty('defaultInput')
   })
 
+  it('writes the typed route context window, reading K and M the way the model rows do', async () => {
+    const { mutate, onClose } = mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme-gateway' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://gateway.acme.example/v1' } })
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'acme-large' } })
+    fireEvent.change(screen.getByLabelText(en.contextWindow), { target: { value: '190K' } })
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    // What lands in settings is always a plain token count.
+    expect(firstMutate(mutate).ops[0]?.value).toMatchObject({ defaultContextWindow: 190_000 })
+  })
+
+  it('refuses to create while the route context window is blank or unreadable', () => {
+    mountCard()
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://acme.test/v1' } })
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'm' } })
+    expect(buttonNamed(en.create).disabled).toBe(false)
+
+    // No inherit path exists for this field, so a blank is a fault, not an
+    // option: the same positive-count rule the model rows apply. The error
+    // sits under the field itself, and the shared line stays silent rather
+    // than contradicting the filled-in model list above it.
+    fireEvent.change(screen.getByLabelText(en.contextWindow), { target: { value: '' } })
+    expect(screen.getByText(en.modelContextInvalid)).toBeTruthy()
+    expect(screen.queryByText(en.customNeedsModels)).toBeNull()
+    expect(buttonNamed(en.create).disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(en.contextWindow), { target: { value: 'abc' } })
+    expect(buttonNamed(en.create).disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(en.contextWindow), { target: { value: '190000' } })
+    expect(screen.queryByText(en.modelContextInvalid)).toBeNull()
+    expect(buttonNamed(en.create).disabled).toBe(false)
+  })
+
   it('scopes each card to fields a provider can actually own', async () => {
     // Reasoning effort is a per-MODEL capability and the
     // models under one provider disagree about it, so a provider-scoped
@@ -755,7 +797,10 @@ describe('hand-declared providers', () => {
 
     mountCard()
     fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
-    expect(fields()).toEqual([en.customRoute, en.customDisplayName, en.baseUrl, en.customApi, en.visionEnabled, en.keyInput])
+    expect(fields()).toEqual([
+      en.customRoute, en.customDisplayName, en.baseUrl, en.customApi,
+      en.visionEnabled, en.contextWindow, en.keyInput,
+    ])
     cleanup()
 
     // A shipped route's models each carry their own protocol, so its editor
@@ -767,13 +812,15 @@ describe('hand-declared providers', () => {
     cleanup()
 
     // A hand-declared route named its own protocol at creation, so editing it
-    // reaches the same field the create card asked for.
+    // reaches the same field the create card asked for — including the vision
+    // switch, shown read-only because per-model `input` fields may sit beside
+    // the route claim this card would otherwise rewrite.
     await mountSection({
       providers: { 'acme-gateway': { api: 'openai-completions', baseURL: 'https://gateway.acme.example/v1' } },
       declaredRoutes: ['acme-gateway'],
     })
     openEditor('acme-gateway')
-    expect(fields()).toEqual([en.keyInput, en.customDisplayName, en.baseUrl, en.customApi])
+    expect(fields()).toEqual([en.keyInput, en.customDisplayName, en.baseUrl, en.customApi, en.visionEnabled])
   })
 
   it('renames a declared route and falls back to its id when the name is cleared', async () => {
@@ -891,6 +938,61 @@ describe('hand-declared providers', () => {
       ops: [{ op: 'set', path: ['providers', 'acme-gateway', 'api'], value: 'anthropic-messages' }],
       expectedRevision: 3,
     })
+  })
+
+  it('shows the route vision claim read-only when the create card switched it on', async () => {
+    const { mutate } = await mountSection({
+      providers: {
+        'acme-gateway': {
+          api: 'openai-completions',
+          baseURL: 'https://gateway.acme.example/v1',
+          defaultInput: ['text', 'image'],
+          models: [{ id: 'acme-large' }],
+        },
+      },
+      declaredRoutes: ['acme-gateway'],
+    })
+    openEditor('acme-gateway')
+
+    // The claim the create card stored is visible again, and the disabled box
+    // says what it is: a mirror, not an edit.
+    const vision = screen.getByLabelText<HTMLInputElement>(en.visionEnabled)
+    expect(vision.checked).toBe(true)
+    expect(vision.disabled).toBe(true)
+
+    // Applying over an unchanged claim writes nothing: the card cannot touch
+    // the field it only shows.
+    fireEvent.click(screen.getByText(en.apply))
+    await waitFor(() => { expect(screen.queryByRole('status')).not.toBeNull() })
+    expect(mutate).not.toHaveBeenCalled()
+  })
+
+  it('shows the switch unchecked while the route keeps the text-only fallback', async () => {
+    // The effective profile carries the adapter's `[text]` default once a
+    // profile exists, so the off state is an explicit list, not an absence.
+    await mountSection({
+      providers: {
+        'acme-gateway': {
+          api: 'openai-completions',
+          baseURL: 'https://gateway.acme.example/v1',
+          defaultInput: ['text'],
+          models: [{ id: 'acme-large' }],
+        },
+      },
+      declaredRoutes: ['acme-gateway'],
+    })
+    openEditor('acme-gateway')
+
+    const vision = screen.getByLabelText<HTMLInputElement>(en.visionEnabled)
+    expect(vision.checked).toBe(false)
+    expect(vision.disabled).toBe(true)
+  })
+
+  it('offers no route-level claim on a shipped route, whose models carry their own', async () => {
+    await mountSection({ providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY' } } })
+    openEditor('openai')
+
+    expect(screen.queryByLabelText(en.visionEnabled)).toBeNull()
   })
 
   it('selects nothing for a declared route whose profile names no protocol', async () => {
@@ -1189,6 +1291,8 @@ describe('hand-declared providers', () => {
     expect(firstMutate(mutate).ops[0]?.value).toEqual({
       api: 'anthropic-messages',
       baseURL: 'https://acme.test/v1',
+      // The pre-filled route context fallback travels even when untouched.
+      defaultContextWindow: 200_000,
       models: [{ id: 'm' }],
     })
   })

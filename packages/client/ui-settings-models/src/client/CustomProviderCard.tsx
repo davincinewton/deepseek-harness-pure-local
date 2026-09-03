@@ -36,7 +36,7 @@ import type { ReactNode } from 'react'
 import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
 import { apiKeyFailure } from './apiKey.ts'
 import { EditorFooter } from './EditorFooter.tsx'
-import { validateDeepSeekModels } from './DeepSeekModelsEditor.tsx'
+import { parseCapacity, validateDeepSeekModels } from './DeepSeekModelsEditor.tsx'
 import { ModelListEditor } from './ModelListEditor.tsx'
 import type { ModelDraft } from './ModelListEditor.tsx'
 import { deriveKeyRef, messageOf } from './store.ts'
@@ -96,6 +96,10 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   // hand-declared gateway that does not serve images must be refused before
   // the image is attached, not mid-turn.
   const [vision, setVision] = useState(false)
+  // Pre-filled, never blank: a hand-declared model has no catalog entry to
+  // size it, so the route's context fallback is always written rather than
+  // left to the adapter's guess.
+  const [contextWindowDraft, setContextWindowDraft] = useState('200000')
   const [keyDraft, setKeyDraft] = useState('')
   const [models, setModels] = useState<readonly ModelDraft[]>([])
   const [busy, setBusy] = useState(false)
@@ -117,12 +121,20 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   // fallbacks; what a route cannot default is at least one model.
   const modelFailure = validateDeepSeekModels(models)
   const keyFailure = apiKeyFailure(keyDraft)
+  // The same rule the model rows apply: a positive whole count. Blank and
+  // unreadable both fail, because this field has no inherit path to fall back
+  // to — the adapter's guess is not an option the card may pick for the user.
+  const contextWindowValue = parseCapacity(contextWindowDraft)
+  const contextWindowInvalid = contextWindowValue === undefined
+    || !Number.isInteger(contextWindowValue)
+    || contextWindowValue <= 0
   // The typed key with paste whitespace removed. A blank field yields an empty
   // string, which the create path reads as "no key supplied" — a route may
   // legitimately authenticate through the provider's own ambient discovery.
   const keyValue = keyDraft.trim()
   const ready = route.length > 0 && !routeInvalid && !routeTaken
     && baseURL.length > 0 && models.length > 0 && modelFailure === undefined
+    && contextWindowInvalid === false
     && keyFailure === undefined
   // The one blocked gate worth a line under the form. A satisfied card says
   // nothing at all rather than printing an empty paragraph.
@@ -131,6 +143,9 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
     // blocked only by the key stays silent here rather than answering with the
     // next unmet gate — which is satisfied, and reads as a second, false fault.
     || keyFailure !== undefined
+    // Same for the context window, whose error sits under its own field:
+    // falling through would print "no models yet" beside a filled-in list.
+    || contextWindowInvalid
     // Same for the route id, and it must be tested rather than assumed: the
     // fallback arm below reads "no models yet", so an unmet route gate would
     // fall through to it and contradict the filled-in list right above.
@@ -160,6 +175,10 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         // entry of its own, so its modalities resolve from here. Omission is
         // not "text" spelled out — it is the adapter's fallback itself.
         ...vision ? { defaultInput: ['text', 'image'] } : {},
+        // Written unconditionally: the field is pre-filled and create is gated
+        // on it parsing to a positive whole count, so no profile this card
+        // makes is left sized by the adapter's guess.
+        defaultContextWindow: contextWindowValue as number,
         models: models.map(model => ({ ...model })),
       }
       const response = await api.settings.mutate({
@@ -275,6 +294,23 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         />
         <span className={styles['checkboxLabel']}>{t('visionEnabled')}</span>
       </label>
+      {/* The route's context fallback, declared once for every model the
+          endpoint described by id alone. Pre-filled, and there is no blank
+          path: leaving it to the adapter's guess is not an option here. */}
+      <div className={styles['field']}>
+        <span className={styles['fieldLabel']}>{t('contextWindow')}</span>
+        <input
+          className={styles['input']}
+          type="text"
+          value={contextWindowDraft}
+          aria-label={t('contextWindow')}
+          disabled={profileDisabled}
+          onChange={(event) => { setContextWindowDraft(event.target.value) }}
+        />
+        {contextWindowInvalid === false
+          ? null
+          : <p className={styles['error']}>{t('modelContextInvalid')}</p>}
+      </div>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('keyInput')}</span>
         <input

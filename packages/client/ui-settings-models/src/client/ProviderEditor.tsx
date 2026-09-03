@@ -138,6 +138,18 @@ function refFor(namespace: SettingsNamespaceView, path: readonly string[], provi
 }
 
 /**
+ * Whether the effective route profile claims image input. The create card's
+ * switch writes `defaultInput: ['text', 'image']`; the adapter's fallback
+ * answers `[text]`, so 'image' is present exactly when someone declared it —
+ * in the user layer or a composition base, which is why this reads the
+ * effective value rather than the user section alone.
+ */
+function visionClaimed(profile: unknown): boolean {
+  const input = getPath(profile, ['defaultInput'])
+  return Array.isArray(input) && input.includes('image')
+}
+
+/**
  * Render one provider's editing card.
  * @param props - the addressed profile plus wire faces and copy.
  * @returns the editor card.
@@ -445,6 +457,23 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
                     {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
                   </select>
                 </div>
+              )
+              : null}
+            {/* A read-only mirror of the create card's switch: the route-level
+                modality claim as the effective profile carries it. This card
+                cannot edit it — a hand-written per-model `input` may sit beside
+                the route claim, so the settings document owns the correction. */}
+            {ownsIdentity
+              ? (
+                <label className={styles['checkboxField']}>
+                  <input
+                    type="checkbox"
+                    checked={visionClaimed(fallback)}
+                    disabled
+                    aria-label={t('visionEnabled')}
+                  />
+                  <span className={styles['checkboxLabel']}>{t('visionEnabled')}</span>
+                </label>
               )
               : null}
             {/* Both families edit the same rows through the same contract; only
