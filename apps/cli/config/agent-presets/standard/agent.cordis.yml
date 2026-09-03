@@ -179,12 +179,15 @@
   config:
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
+      disabled: true
 
     - id: tool-subagent-list-agents
       name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+      disabled: true
 
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
       config:
         provider: spawn
         toolName: subagent
@@ -192,6 +195,7 @@
 
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
       config:
         provider: fork
         toolName: subagent_fork
@@ -225,9 +229,11 @@
 
     - id: tool-workflow
       name: '@deepseek-ai/dsh-tool-workflow'
+      disabled: true
 
     - id: tool-ralph
       name: '@deepseek-ai/dsh-tool-ralph'
+      disabled: true
       config:
         subagentProvider: spawn
         maxRounds: 64
