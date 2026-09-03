@@ -167,6 +167,26 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+/** Subagent firing policy: controls whether subagent creation is allowed. */
+export type SubagentFiring = 'enabled' | 'disabled'
+
+/** Configuration for the subagent runtime. */
+export interface SubagentRuntimeConfig {
+  /**
+   * Whether subagent creation is allowed. When `'disabled'`, all calls to
+   * `start()` and `startContinuable()` throw a `SubagentFiringError`.
+   * Defaults to `'enabled'`.
+   */
+  subagentFiring?: SubagentFiring
+}
+
+/** Error thrown when subagent creation is blocked by the firing policy. */
+export class SubagentFiringError extends SubagentError {
+  constructor() {
+    super('Subagent creation is disabled by the deployment configuration', 'SUBAGENT_FIRING_DISABLED')
+  }
+}
+
 /** Named provider registry with one-shot runs, durable discovery, and continuable-child operations. */
 export class SubagentRuntime extends Service {
   private providers = new Map<string, SubagentProvider>()
@@ -179,9 +199,12 @@ export class SubagentRuntime extends Service {
    * composes into the carrier.
    */
   private readonly emitLifecycle: LifecycleEmitter
+  /** Whether subagent creation is currently allowed. */
+  private readonly firing: SubagentFiring
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config: SubagentRuntimeConfig = {}) {
     super(ctx, 'subagents')
+    this.firing = config.subagentFiring ?? 'enabled'
     this.emitLifecycle = createLifecycleEmitter(this.ctx, parent => scopeTarget(this, parent))
     ctx.inject(['agents'], (childCtx: Context) => {
       const manager = new SubagentContinuationManager(childCtx, {
@@ -210,6 +233,7 @@ export class SubagentRuntime extends Service {
    * @throws when continuation services are unavailable or materialization fails.
    */
   async startContinuable(spec: ContinuableStartSpec): Promise<ContinuableStart> {
+    this.assertFiring()
     return this.requireContinuations().startContinuable(spec)
   }
 
@@ -412,6 +436,7 @@ export class SubagentRuntime extends Service {
    * @returns the published holder-owned run.
    */
   async start(name: string, request: SubagentStartRequest): Promise<SubagentRun> {
+    this.assertFiring()
     const provider = this.expectProvider(name)
     this.assertCapabilities(provider, request)
     assertSubagentMaxDepth(request.maxDepth)
@@ -443,6 +468,11 @@ export class SubagentRuntime extends Service {
       )
     }
     return provider.prepareContinuable(request)
+  }
+
+  /** Reject subagent creation when the deployment firing policy is disabled. */
+  private assertFiring(): void {
+    if (this.firing === 'disabled') throw new SubagentFiringError()
   }
 
   /** Look up a provider for dispatch or fail loud. */
