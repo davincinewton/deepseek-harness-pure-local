@@ -304,14 +304,20 @@
 
     # Continuable background children are selected per delegation tool. The
     # separately loaded follow-up tool registers the one global `send_message`.
+    # Delegation tools are disabled at the base level: they belong to the agent
+    # plane and are mounted per-session by presets (web) or explicitly by a
+    # surface bundle that opts in. The registry and backends above stay.
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
+      disabled: true
 
     - id: tool-subagent-list-agents
       name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+      disabled: true
 
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
       config:
         provider: spawn
         toolName: subagent
@@ -323,6 +329,7 @@
     # See .agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.md.
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
       config:
         provider: fork
         toolName: subagent_fork
@@ -339,6 +346,7 @@
 
     - id: tool-workflow
       name: '@deepseek-ai/dsh-tool-workflow'
+      disabled: true
 
     - id: timeout-policy
       name: '@deepseek-ai/dsh-tool-call-timeout-policy'
@@ -377,6 +385,7 @@
     # Fresh-agent Ralph iteration over a build-time-fixed script.
     - id: tool-ralph
       name: '@deepseek-ai/dsh-tool-ralph'
+      disabled: true
       config:
         subagentProvider: spawn
         maxRounds: 64

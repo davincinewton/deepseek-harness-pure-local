@@ -368,34 +368,14 @@
 # a process singleton with a cross-session query surface (`listChildren`,
 # `followup`) that the host api-proxy serves to the browser, and a provider
 # registers under a globally unique name, so a per-session copy would both
-# starve that host row and collide on the second session. What a preset
-# chooses is which delegation TOOLS its agent sees, below.
-
-- id: tool-subagent-control
-  disabled: true
-
-- id: tool-subagent-list-agents
-  disabled: true
-
-- id: tool-subagent
-  disabled: true
-
-- id: tool-subagent-fork
-  disabled: true
-
-# `tool-subagent-report` is host-plane for the same reason as the registry, not
-# because a preset may not want it: it registers a CONTINUABLE SETUP on that
-# singleton rather than a tool this agent calls, and the setup list is not
+# starve that host row and collide on the second session. Delegation tools are
+# disabled at the base level; a preset re-enables them per agent.
+# `tool-subagent-report` is host-plane: it registers a CONTINUABLE SETUP on
+# that singleton rather than a tool this agent calls, and the setup list is not
 # scope-aware — one copy per mounted preset means every child gets `report`
 # registered once per live session, which throws on the second.
 
 - id: workflow-worker-thread
-  disabled: true
-
-- id: tool-workflow
-  disabled: true
-
-- id: tool-ralph
   disabled: true
 
 - id: agent-instructions
