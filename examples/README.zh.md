@@ -8,6 +8,10 @@
 
 通过通用 MCP 客户端连接受支持第三方记忆服务器的可选 overlay。详见[记忆示例参考](mcp-memory/README.md)。
 
+## mcp-chrome
+
+通过通用 MCP 客户端连接 mcp-chrome 浏览器桥接器的可选 overlay，暴露用户真实的 Chrome 浏览器。详见[mcp-chrome 示例参考](mcp-chrome/README.md)。
+
 ## headless-agent
 
 非交互式 agent（智能体）：接受一项任务并运行，然后以选定的机器可读或人类可读格式输出结果。详见[无头示例参考](headless-agent/README.md)。

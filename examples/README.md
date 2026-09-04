@@ -8,6 +8,10 @@ Runnable demonstrations of the main DeepSeek Harness interfaces and extension po
 
 Optional overlays that connect supported third-party memory servers through the generic MCP client. See the [memory example reference](mcp-memory/README.md).
 
+## mcp-chrome
+
+An opt-in overlay that connects the mcp-chrome browser bridge through the generic MCP client, exposing the user's real Chrome browser. See the [mcp-chrome example reference](mcp-chrome/README.md).
+
 ## headless-agent
 
 A non-interactive agent that accepts one task, runs it, and emits a selected machine-readable or human-readable output format. See the [headless example reference](headless-agent/README.md).

@@ -1,0 +1,12 @@
+# Opt-in reference for the mcp-chrome bridge (davincinewton/mcp-chrome-python):
+# a Chrome extension plus a local Python bridge that exposes the user's real,
+# logged-in browser over Streamable HTTP. DSH connects to the bridge but does
+# not install or run it — start `mcp-chrome-bridge` and load the extension
+# first (README.md). The bridge listens on 127.0.0.1:12306 by default.
+- insert:
+    - id: mcp-chrome
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: chrome
+        transport: streamable-http
+        url: http://127.0.0.1:12306/mcp
