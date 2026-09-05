@@ -18,14 +18,17 @@ Search the web through the user's real Chrome browser (via the `mcp__chrome__*` 
 - **Close what you open**: remember the search tab's `tabId` and close it with `chrome_close_tabs` when done.
 - **Resolve URLs on demand**: search result links are opaque redirect tokens. Resolve a URL only for results you actually need to cite or follow up on (typically the top 1–3), never for the whole list.
 - **Stop at anti-bot walls**: if Google shows a CAPTCHA or "unusual traffic" page, do not retry or attempt to solve it. Report the block and, if useful, fall back to Bing once.
-- Cap the result list at 8 items and snippets at ~200 characters.
+- **Two pages**: always fetch the first *and* second result page (Step 1) and merge them before presenting. Cap each page at 8 items (16 total) and snippets at ~200 characters.
 
-## Step 1 — Run the search
+## Step 1 — Run the search (two pages)
 
-`chrome_navigate` to the search URL (note the returned `tabId`):
+`chrome_navigate` to the page-1 search URL (note the returned `tabId`), extract its results (Step 2), then navigate the **same tab** to the page-2 URL and extract again:
 
-- Web: `https://www.google.com/search?q=<url-encoded query>`
-- News: `https://www.google.com/search?q=<url-encoded query>&tbm=nws`
+- Web page 1: `https://www.google.com/search?q=<url-encoded query>`
+- News page 1: `https://www.google.com/search?q=<url-encoded query>&tbm=nws`
+- Page 2: the page-1 URL with `&start=10` appended (e.g. `...&tbm=nws&start=10`)
+
+Merge the two lists and deduplicate by title. If page 2 returns 0 items or hits an anti-bot wall, present page 1 only and note that page 2 was unavailable.
 
 ## Step 2 — Extract results
 
@@ -86,7 +89,7 @@ Do not use `chrome_navigate` with url `back` — it fails with a history error; 
 
 ## Step 4 — Present and clean up
 
-- Present results as a markdown list: title (linked when resolved), source, date, snippet. Cite resolved URLs as markdown links; for unresolved items give title + source + snippet and note the URL is available on request.
+- Present the merged two-page results as a markdown list: title (linked when resolved), source, date, snippet. Cite resolved URLs as markdown links; for unresolved items give title + source + snippet and note the URL is available on request.
 - Close the search tab: `chrome_close_tabs` with its `tabId`.
 
 ## Fallback engine — Bing
