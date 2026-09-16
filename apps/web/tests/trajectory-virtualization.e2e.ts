@@ -331,7 +331,10 @@ describe('web e2e: Trajectory virtualization over tail-paged history', () => {
         return (window as Window & { __trajectoryScrollCalls?: number })
           .__trajectoryScrollCalls ?? 0
       })
-      expect(streamingScrollCalls).toBeLessThanOrEqual(5)
+      // Bounded batching: calls track row insertions in the counted window
+      // (including the session's injected skill-catalog context row), never
+      // the 80 stream fragments.
+      expect(streamingScrollCalls).toBeLessThanOrEqual(6)
       expect(await mountedRows(page)).toBeLessThanOrEqual(MAX_MOUNTED_ROWS)
       expect({
         pageErrors: tripwire.pageErrors,

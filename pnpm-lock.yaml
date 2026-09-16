@@ -1061,6 +1061,9 @@ importers:
       '@deepseek-ai/dsh-llm-retry':
         specifier: workspace:^
         version: link:../../llm/llm-retry
+      '@deepseek-ai/dsh-mcp-client':
+        specifier: workspace:^
+        version: link:../../mcp/mcp-client
       '@deepseek-ai/dsh-permission-presets':
         specifier: workspace:^
         version: link:../../interaction/permission-presets
@@ -1115,6 +1118,9 @@ importers:
       '@deepseek-ai/dsh-skill-badge':
         specifier: workspace:^
         version: link:../../skill/skill-badge
+      '@deepseek-ai/dsh-skill-browser':
+        specifier: workspace:^
+        version: link:../../skill/skill-browser
       '@deepseek-ai/dsh-skill-filesystem':
         specifier: workspace:^
         version: link:../../skill/skill-filesystem
@@ -6771,6 +6777,21 @@ importers:
       '@deepseek-ai/dsh-skill':
         specifier: workspace:^
         version: link:../skill
+
+  packages/skill/skill-browser:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-skill':
+        specifier: workspace:^
+        version: link:../skill
+      yaml:
+        specifier: ^2.4.2
+        version: 2.9.0
 
   packages/skill/skill-filesystem:
     dependencies:

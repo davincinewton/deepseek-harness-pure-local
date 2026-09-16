@@ -140,6 +140,18 @@ const homeAndGuide = pairedPages([
   },
 ])
 
+// English-only page: no `.zh.md` counterpart exists, so both locales project
+// the single English source instead of a sibling pair.
+const browserGuide = mirroredPages([{
+  source: 'docs/user/guide/browser.md',
+  route: 'guide/browser.md',
+  contentLocale: 'en-US',
+  label: { root: '浏览器技能', en: 'Browser skills' },
+  sidebar: { root: 'zh-guide', en: 'en-guide' },
+  section: { root: '入门', en: 'Guide' },
+  order: 3,
+}])
+
 const develop = pairedPages([
   {
     source: 'docs/user/develop/basic/index.md',
@@ -473,6 +485,7 @@ export function sectionSpec(locale: DocsLocale, label: string): DocsSection & { 
 /** Every canonical page published by the documentation website. */
 export const docsPages: DocsPage[] = [
   ...homeAndGuide,
+  ...browserGuide,
   ...develop,
   ...cordisTutorial,
   ...cordisPrimerReference,

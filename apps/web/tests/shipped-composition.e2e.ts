@@ -18,7 +18,8 @@ import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import { launchWebScaffold, type WebScaffold } from './scaffold.ts'
+import type {} from '@deepseek-ai/dsh-skill'
+import { launchWebScaffold, shippedCompositionRows, type WebScaffold } from './scaffold.ts'
 
 const FILE_REFERENCE_PROMPT = fileURLToPath(new URL(
   './snapshots/web-runtime-context/file-reference-prompt.expected.md', import.meta.url,
@@ -182,6 +183,45 @@ it('lets a preset producer reach the background-job registry', async () => {
     expect(collected.content).toEqual([
       { type: 'text', text: expect.stringContaining('SHIPPED_BACKGROUND_OK') as unknown as string },
     ])
+  } finally {
+    await handle.dispose()
+  }
+}, 120_000)
+
+it('ships the built-in browser capability: mcp-chrome at the default bridge URL and four bundled skills', async () => {
+  // Deployment facts, asserted against the shipped layer stack (no test pins):
+  // the base bundle mounts the browser skill provider enabled and the mcp-chrome
+  // row at the default bridge URL.
+  const rows = shippedCompositionRows()
+  expect(rows.find(row => row.id === 'skill-browser')).toEqual({
+    id: 'skill-browser',
+    name: '@deepseek-ai/dsh-skill-browser',
+  })
+  expect(rows.find(row => row.id === 'mcp-chrome')).toEqual({
+    id: 'mcp-chrome',
+    name: '@deepseek-ai/dsh-mcp-client',
+    config: { serverName: 'chrome', transport: 'streamable-http', url: 'http://127.0.0.1:12306/mcp' },
+  })
+
+  scaffold = await launchWebScaffold()
+  const ctx = scaffold.ctx
+  const handle = await ctx.agents.create({
+    sessionId: SessionId('shipped-browser-skills'),
+    setup: agentCtx => ctx.agentPresets.mount(agentCtx).then(() => undefined),
+  })
+  try {
+    // The lane pins mcp-chrome to a dead loopback endpoint, so the bridge is
+    // down here by construction: no `mcp__chrome__*` tool appears (the catalog
+    // equality in the first test already proves it), while the skill-browser
+    // provider's four bundled skills must still be in the agent's catalog —
+    // the capability is known even when the bridge is down.
+    const skills = await ctx.skills.list({ scope: handle.agent, cwd: scaffold.workspaceCwd })
+    expect(skills.map(skill => skill.name).sort()).toEqual(expect.arrayContaining([
+      'browser-research-report',
+      'web-search-chrome',
+      'web-search-chrome-url',
+      'web-search-multi-engine',
+    ]))
   } finally {
     await handle.dispose()
   }

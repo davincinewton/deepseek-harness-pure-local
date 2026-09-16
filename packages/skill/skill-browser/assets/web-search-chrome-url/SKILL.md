@@ -19,6 +19,10 @@ Google result `href`s are **opaque `/goto?url=<token>` redirect tokens** — the
 - This drives the user's **real, logged-in browser**: results may be personalized. State that in any downstream report's methodology.
 - Reuse `web-search-chrome`'s search + extraction (two pages, `start=0` + `start=10`). Load it for the exact extraction JS if needed; the extraction here is identical.
 
+## If the chrome tools are unavailable
+
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), this skill cannot run: its output requires browser-based redirect resolution and on-page full-text capture, which the built-in `web_search` tool does not provide. Report that the capability is unavailable because the mcp-chrome bridge is not running, and offer `web_search` as a degraded alternative (snippets only, no resolved URLs or full text). Do not retry chrome calls or loop.
+
 ## Rules
 
 - **Read-only**: navigate and read only. No logins, purchases, or form submissions.

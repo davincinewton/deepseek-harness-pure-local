@@ -12,6 +12,10 @@ Search the web through the user's real Chrome browser (via the `mcp__chrome__*` 
 - The `mcp__chrome__*` tools must be available (the mcp-chrome bridge is running with Chrome and its extension). If a chrome tool call fails with a connection error, stop and tell the user to check that Chrome and the mcp-chrome extension are running — do not retry in a loop.
 - This drives the user's **real, logged-in browser**: results may be personalized by their Google account, and the browser's location/account state is visible to the search engine. That is expected; never claim neutral or anonymous results.
 
+## If the chrome tools are unavailable
+
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), do not attempt browser search: run the built-in `web_search` tool instead — it returns the same result shape (title, source, date, snippet, URL) — and note that browser-based search is unavailable because the mcp-chrome bridge is not running. Do not retry chrome calls or loop.
+
 ## Rules
 
 - **Read-only**: navigate and read only. No logins, no purchases, no form submissions to third parties, no account changes.
@@ -100,6 +104,7 @@ If Google is blocked, search `https://www.bing.com/search?q=<query>` in a new ta
 
 | Symptom | Action |
 |---|---|
+| No `mcp__chrome__*` tools in catalog | Bridge down — fall back to `web_search`; note browser search unavailable |
 | Chrome tool connection error | Tell the user to check Chrome + mcp-chrome extension; stop |
 | CAPTCHA / "unusual traffic" | Stop; report; optionally one Bing fallback |
 | 0 extracted items | Layout drift — re-discover via `chrome_read_page` and adapt selectors |

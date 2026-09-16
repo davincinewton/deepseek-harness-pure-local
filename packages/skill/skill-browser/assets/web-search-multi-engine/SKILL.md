@@ -21,6 +21,10 @@ DuckDuckGo's HTML endpoint is the deliberate third engine: no JS rendering, no a
 - This drives the user's **real, logged-in browser**: Google results are personalized by the user's account; Bing by its account/region; DuckDuckGo by region only. State that in any downstream report's methodology.
 - Reuse `web-search-chrome`'s Google extraction JS. Load that skill for the exact code; the Google extraction here is identical (standard `#rso` layout; if the query is news-shaped and the news layout appears, use its news branch).
 
+## If the chrome tools are unavailable
+
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), this skill cannot run: cross-engine corroboration and URL/full-text resolution require the real browser, which the built-in `web_search` tool does not provide. Report that the capability is unavailable because the mcp-chrome bridge is not running, and offer `web_search` as a degraded alternative (single engine, snippets only). Do not retry chrome calls or loop.
+
 ## Rules
 
 - **Read-only**: navigate and read only. No logins, purchases, or form submissions.
@@ -67,7 +71,7 @@ In the single search tab, in this order (note the `tabId` from the first navigat
    }
    return JSON.stringify({ layout: 'ddg-html', count: out.length, items: out });
    ```
-   DDG items carry a **clean real URL** in `url` (decoded from `uddg`) — no click resolution needed for these.
+   DDG items carry a **clean real URL** in `url` (decoded from `uddg`) — no click resolution needed for these. If the bulk output is `[BLOCKED]` despite sanitized snippets, the decoded `uddg` URLs contain query strings: re-query returning **one `url` at a time** (single URLs pass), or drop `url` and click the DDG result link instead.
 
 Per-engine result: `{ engine, count, items: [{ title, source?, date?, snippet(≤200), url?, pos }] }` where `pos` is the 0-based position within that engine's extraction (the number you click in Step 3) and `url` is present only for DDG items (clean real URL; Google/Bing items get their URL in Step 3). Google items get `source`/`date` per `web-search-chrome`; Bing and DDG items get `source`/`date` empty unless the extraction surfaces them.
 

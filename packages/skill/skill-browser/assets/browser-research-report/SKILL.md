@@ -1,6 +1,6 @@
 ---
 name: browser-research-report
-description: Use when the user wants a professional research report on a topic built from browser-based web research (e.g. "make a report on this week's crypto news"). Runs the full pipeline: scope → topic analysis (coverage map) → segmented search → deep article fetch → synthesis → report. Writes a dated markdown report to the workspace root.
+description: "Use when the user wants a professional research report on a topic built from browser-based web research (e.g. \"make a report on this week's crypto news\"). Runs the full pipeline: scope → topic analysis (coverage map) → segmented search → deep article fetch → synthesis → report. Writes a dated markdown report to the workspace root."
 ---
 
 # Browser Research Report
@@ -12,6 +12,10 @@ Build a professional research report on a topic using the user's real Chrome bro
 - The `mcp__chrome__*` tools must be available (same as `web-search-chrome`). If a chrome tool call fails with a connection error, stop and tell the user to check Chrome and the mcp-chrome extension.
 - The search stage delegates to the `web-search-chrome` skill (two pages per query, `start=0` + `start=10`). Load it before searching.
 - This drives the user's **real, logged-in browser**: results may be personalized. State that caveat in the report's methodology footnote.
+
+## If the chrome tools are unavailable
+
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), do not start the pipeline: the deep article fetch that makes this a real report requires the browser, and a snippet-only report is a failed report by this skill's own standard. Report that the research report cannot be produced because the mcp-chrome bridge is not running. Do not begin searching or write a degraded report.
 
 ## Pipeline
 

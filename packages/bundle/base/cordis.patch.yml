@@ -244,8 +244,28 @@
       name: '@deepseek-ai/dsh-skill-badge'
       disabled: true
 
+    # The browser skills ship enabled (unlike the badge): every deployment
+    # knows the capability, and each body degrades to `web_search` or reports
+    # unavailability while the bridge below is down.
+    - id: skill-browser
+      name: '@deepseek-ai/dsh-skill-browser'
+
     - id: tool-skill
       name: '@deepseek-ai/dsh-tool-skill'
+
+    # The mcp-chrome bridge connection, built in: while the bridge (a
+    # third-party Python process plus Chrome extension; docs/user/guide/browser.md)
+    # runs on 127.0.0.1:12306, its tools are exposed as `mcp__chrome__*`. A
+    # down bridge is an expected state — the row logs a bounded retry series
+    # and exposes no tools. A non-default bridge port overrides this row in
+    # the profile or home patch layer (a patch replaces the whole config);
+    # disable the row to opt out.
+    - id: mcp-chrome
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: chrome
+        transport: streamable-http
+        url: http://127.0.0.1:12306/mcp
 
     - id: commands
       name: '@deepseek-ai/dsh-commands'

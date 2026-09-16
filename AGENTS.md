@@ -141,6 +141,8 @@ Comments and docs state complete contracts and context, not reasoning transcript
 
 Docs accompany every code change: update affected README and JSDoc contracts together. Routine bilingual work follows [docs/AGENTS.md](docs/AGENTS.md); only explicit user invocation may run `dsh-translate-docs`. Current-state prose, one physical line per paragraph, one home per fact, and word budgets live there.
 
+**English-only docs (this checkout):** update English sources only; never touch `.zh.md` counterparts or `*.i18n.yaml` records — pairing-gate failures are expected.
+
 ## Editing these instructions
 
 `CLAUDE.md` symlinks `AGENTS.md` at root, `packages/`, and `examples/`; edit the real file. Keep each rule self-contained while linking high-level docs. Condense when clarity survives; raise a `verify-doc-budgets` ceiling when the required content genuinely needs more space.

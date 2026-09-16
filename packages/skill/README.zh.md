@@ -8,6 +8,7 @@
 |---|---|---|
 | [`skill/`](skill/README.md) | 定义 skill 提供方注册和查找 | `ctx.skills` |
 | [`skill-badge/`](skill-badge/README.md) | 贡献可选的内置 dsh 徽章 skill | 注册到 `ctx.skills` |
+| [`skill-browser/`](skill-browser/README.md) | 贡献内置的 mcp-chrome 浏览器 skill | 注册到 `ctx.skills` |
 | [`skill-filesystem/`](skill-filesystem/README.md) | 从本地文件系统发现 skill | 注册到 `ctx.skills` |
 | [`tool-skill/`](tool-skill/README.md) | 发布 skill 目录和面向模型的 loader | 注册到 `ctx.tools` |
 

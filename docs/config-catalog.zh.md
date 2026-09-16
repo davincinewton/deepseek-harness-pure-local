@@ -2023,6 +2023,27 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 来源：[`packages/storage/storage-sqlite/src/index.ts:24`](../packages/storage/storage-sqlite/src/index.ts)
 
+<a id="deepseek-aidsh-subagent"></a>
+
+## `@deepseek-ai/dsh-subagent`
+
+```ts config-catalog
+/** Configuration for the subagent runtime. */
+export interface SubagentRuntimeConfig {
+  /**
+   * Whether subagent creation is allowed. When `'disabled'`, all calls to
+   * `start()` and `startContinuable()` throw a `SubagentFiringError`.
+   * Defaults to `'enabled'`.
+   */
+  subagentFiring?: SubagentFiring
+}
+
+/** Subagent firing policy: controls whether subagent creation is allowed. */
+export type SubagentFiring = 'enabled' | 'disabled'
+```
+
+来源：[`packages/subagent/subagent/src/index.ts:174`](../packages/subagent/subagent/src/index.ts)
+
 <a id="deepseek-aidsh-subagent-acp"></a>
 
 ## `@deepseek-ai/dsh-subagent-acp`

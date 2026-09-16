@@ -30,7 +30,7 @@ import { pathToFileURL } from 'node:url'
 import type { Page } from 'playwright'
 import { expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import Loader from '@deepseek-ai/cordis-plugin-loader'
+import Loader, { type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import Include, { type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Group from '@deepseek-ai/cordis-plugin-group'
 import { scrubRequestHeaders, stabilizeFixtureMessageIds } from '@deepseek-ai/dsh-acp-snapshot'
@@ -103,6 +103,20 @@ const WEB_PATCH_PATH = join(REPO_ROOT, 'packages/bundle/web-app/cordis.patch.yml
 const INSTALL_ANCHOR = join(REPO_ROOT, 'apps/cli/package.json')
 /** The deployment's own agent-preset root, shipped beside the app's config. */
 const SHIPPED_PRESET_DIR = join(REPO_ROOT, 'apps/cli/config/agent-presets')
+
+/**
+ * The shipped composition row stack WITHOUT the lane's test pins: the dsh-base
+ * and dsh-web-app bundle patches composed over the empty profile root.
+ * Scenarios assert deployment facts (shipped rows, URLs, defaults) against this
+ * instead of a booted context whose pins intentionally diverge.
+ * @returns the composed rows in bundle order.
+ */
+export function shippedCompositionRows(): EntryOptions[] {
+  return composeEntries([
+    loadOverlayPatches('web e2e scaffold', BASE_PATCH_PATH),
+    loadOverlayPatches('web e2e scaffold', WEB_PATCH_PATH),
+  ])
+}
 
 // Replay publishes the provider catalog the gateway routes to (providers
 // mode, never catch-all: with llm-deepseek disabled no adapter exists, so a
@@ -417,6 +431,19 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         agentsHome: join(workspaceCwd, '.agents-home'),
         bundledSkillDir: join(workspaceCwd, '.bundled-skills'),
         watch: false,
+      },
+    },
+    // The built-in mcp-chrome row connects to a developer machine's bridge on
+    // 127.0.0.1:12306; a live bridge must not change replay requests or
+    // goldens. Pin the row to a dead loopback endpoint (a patch replaces the
+    // whole config, so restate it) — the expected down-bridge state the
+    // shipped browser skills fall back from.
+    {
+      id: 'mcp-chrome',
+      config: {
+        serverName: 'chrome',
+        transport: 'streamable-http',
+        url: 'http://127.0.0.1:9/mcp',
       },
     },
     // fs/bash cwd default to process.cwd(); the gateway injects the same

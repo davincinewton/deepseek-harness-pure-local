@@ -2021,6 +2021,27 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 Source: [`packages/storage/storage-sqlite/src/index.ts:24`](../packages/storage/storage-sqlite/src/index.ts)
 
+<a id="deepseek-aidsh-subagent"></a>
+
+## `@deepseek-ai/dsh-subagent`
+
+```ts config-catalog
+/** Configuration for the subagent runtime. */
+export interface SubagentRuntimeConfig {
+  /**
+   * Whether subagent creation is allowed. When `'disabled'`, all calls to
+   * `start()` and `startContinuable()` throw a `SubagentFiringError`.
+   * Defaults to `'enabled'`.
+   */
+  subagentFiring?: SubagentFiring
+}
+
+/** Subagent firing policy: controls whether subagent creation is allowed. */
+export type SubagentFiring = 'enabled' | 'disabled'
+```
+
+Source: [`packages/subagent/subagent/src/index.ts:174`](../packages/subagent/subagent/src/index.ts)
+
 <a id="deepseek-aidsh-subagent-acp"></a>
 
 ## `@deepseek-ai/dsh-subagent-acp`
@@ -2915,6 +2936,22 @@ export interface Config {
 
 Source: [`packages/web/web-fetch-http/src/index.ts:34`](../packages/web/web-fetch-http/src/index.ts)
 
+<a id="deepseek-aidsh-web-search-ddgs"></a>
+
+## `@deepseek-ai/dsh-web-search-ddgs`
+
+Requires: `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` applies the result-count default). */
+export interface Config {
+  /** Default result count when a request carries no `maxResults`. */
+  defaultMaxResults?: number
+}
+```
+
+Source: [`packages/web/web-search-ddgs/src/index.ts:35`](../packages/web/web-search-ddgs/src/index.ts)
+
 <a id="deepseek-aidsh-web-search-deepseek"></a>
 
 ## `@deepseek-ai/dsh-web-search-deepseek`
@@ -3080,8 +3117,8 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-session-projection` ([`packages/session/session-projection/src/index.ts`](../packages/session/session-projection/src/index.ts))
 - `@deepseek-ai/dsh-session-stats` — requires `sessionProjections` ([`packages/session/session-stats/src/index.ts`](../packages/session/session-stats/src/index.ts))
 - `@deepseek-ai/dsh-skill-badge` — requires `skills` ([`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts))
+- `@deepseek-ai/dsh-skill-browser` — requires `skills` ([`packages/skill/skill-browser/src/index.ts`](../packages/skill/skill-browser/src/index.ts))
 - `@deepseek-ai/dsh-storage` ([`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts))
-- `@deepseek-ai/dsh-subagent` ([`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts))
 - `@deepseek-ai/dsh-subprocess-local` ([`packages/subprocess/subprocess-local/src/index.ts`](../packages/subprocess/subprocess-local/src/index.ts))
 - `@deepseek-ai/dsh-terminal` ([`packages/terminal/terminal/src/index.ts`](../packages/terminal/terminal/src/index.ts))
 - `@deepseek-ai/dsh-tool-ask-user` — requires `tools` · `userQuestions` ([`packages/interaction/tool-ask-user/src/index.ts`](../packages/interaction/tool-ask-user/src/index.ts))
