@@ -1,8 +1,12 @@
 /**
  * Connection supervisor: owns the MCP client/transport generations for one
  * plugin instance, keeps the harness tool registry in sync with the live
- * generation, and — when the connection drops — restarts the configured
- * server with bounded exponential backoff.
+ * generation, and — when the connection drops or the transport reports that
+ * its request path has failed — restarts the configured server with bounded
+ * exponential backoff. A Streamable HTTP server that restarts invalidates the
+ * stored session without closing anything, so its rejected requests are the
+ * only available loss signal and drive the same recycling as a dropped
+ * connection.
  *
  * One outage shares one attempt budget (`maxAttempts` consecutive failed
  * attempts, delays doubling from `initialDelayMs` up to `maxDelayMs`). A
@@ -112,6 +116,31 @@ export interface ConnectionHandle {
 }
 
 /**
+ * Message prefixes the SDK's Streamable HTTP transport uses to report failures
+ * of the optional server-push (SSE) channel. Those failures leave the POST
+ * request path usable, and the transport runs its own bounded resumption for
+ * them, so they must not recycle a working generation. Every other
+ * transport-reported error invalidates the request path: a rejected POST (an
+ * HTTP server that restarted no longer recognizes the stored session id and
+ * answers 404 `Session not found` — the SDK client transport reports this and
+ * never closes, because an HTTP session has no connection to close), a failed
+ * fetch, or a dead stdio pipe. Only a fresh `initialize` handshake can obtain
+ * a usable session, so these errors recycle the generation. If the SDK renames
+ * a push-channel message, the error falls to the fatal side: a bounded
+ * reconnect cycle that self-heals, rather than a silent permanent zombie.
+ */
+const PUSH_CHANNEL_FAILURE_PREFIXES = [
+  'Failed to open SSE stream',
+  'SSE stream disconnected',
+  'Failed to reconnect',
+  'Maximum reconnection attempts',
+] as const
+
+function isPushChannelFailure(error: Error): boolean {
+  return PUSH_CHANNEL_FAILURE_PREFIXES.some(prefix => error.message.startsWith(prefix))
+}
+
+/**
  * Start the supervised connection for one MCP server and keep it alive per
  * the reconnect policy.
  *
@@ -189,6 +218,17 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
     })
   }
 
+  /**
+   * Fail closed when a dead generation never reports its close: a replacement
+   * attempt could overlap the old server process. Shared by the
+   * connect-failure path and the transport-failure recycling hook.
+   */
+  function stopForUnclosedGeneration(): void {
+    client = undefined
+    clientClosed = undefined
+    ctx.logger.error(`${label}: failed generation did not close within ${GENERATION_CLOSE_TIMEOUT_MS}ms — reconnect stopped to avoid overlapping server processes; reload the plugin or restart the Host to retry`)
+  }
+
   function scheduleReconnect(): void {
     const lostEstablishedConnection = connectedAt !== undefined
     if (!policy.enabled) {
@@ -230,7 +270,8 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
    * sync. The startup flag belongs to the attempt rather than the shared sync
    * queue, so an early notification cannot consume strict startup semantics.
    * Every failure funnels through {@link generationDown}; success arms the
-   * onclose-driven disconnect path. Never rejects.
+   * onclose-driven disconnect path and the transport-failure recycling
+   * hook. Never rejects.
    *
    * @param startup - Whether this is the plugin's activation attempt.
    */
@@ -242,6 +283,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
     const closed: PromiseWithResolvers<void> = Promise.withResolvers()
     let attemptSettled = false
     let closeObserved = false
+    let transportFailed = false
     const hasClosed = (): boolean => closeObserved
     client = generation
     clientClosed = closed.promise
@@ -268,8 +310,32 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
         }
       },
     )
+    const transport = createTransport(config)
+    // `Protocol.connect` chains onto an already-assigned transport `onerror`
+    // instead of replacing it, so this hook stays live for the generation's
+    // whole life. A request-path transport failure is permanent for this
+    // generation — a Streamable HTTP rejection (e.g. a restarted server's
+    // 404 `Session not found`) leaves the client holding an invalid session
+    // id with no close event — so close the generation (fast-rejecting
+    // in-flight requests) and let the close-driven path recycle it, guarded
+    // by the same close barrier the connect-failure path uses.
+    transport.onerror = (error: Error): void => {
+      if (isPushChannelFailure(error)) {
+        ctx.logger.info(`${label}: server-push channel failed, request path unaffected: ${String(error)}`)
+        return
+      }
+      // A failure before the attempt settles belongs to the catch path below.
+      if (!attemptSettled || transportFailed || !isCurrent(generation)) return
+      transportFailed = true
+      ctx.logger.warn(`${label}: request transport failed, recycling the connection: ${String(error)}`)
+      void generation.close().catch(() => { /* the transport is already failing; its close error cannot inform the recycle */ })
+      void waitForClose(closed.promise).then((quiesced) => {
+        if (quiesced || disposed) return
+        stopForUnclosedGeneration()
+      })
+    }
     try {
-      await generation.connect(createTransport(config))
+      await generation.connect(transport)
       if (hasClosed()) {
         attemptSettled = true
         generationDown(generation)
@@ -286,9 +352,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
       attemptSettled = true
       if (!isCurrent(generation)) return
       if (!quiesced) {
-        client = undefined
-        clientClosed = undefined
-        ctx.logger.error(`${label}: failed generation did not close within ${GENERATION_CLOSE_TIMEOUT_MS}ms — reconnect stopped to avoid overlapping server processes; reload the plugin or restart the Host to retry`)
+        stopForUnclosedGeneration()
         return
       }
       generationDown(generation)

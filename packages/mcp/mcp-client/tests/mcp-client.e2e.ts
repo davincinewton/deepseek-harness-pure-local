@@ -4,10 +4,12 @@
  * 2. @modelcontextprotocol/server-everything (official integration test server)
  * 3. @modelcontextprotocol/server-filesystem (real filesystem operations)
  * 4. An in-process StreamableHTTPServerTransport server over Streamable HTTP
+ * 5. A restarted stateful Streamable HTTP server (stale-session self-healing)
  *
  * No API key needed — all servers are local/keyless.
  */
 
+import { randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -559,5 +561,141 @@ describe('streamable-http — in-process MCP server', () => {
   it('sends configured headers on every HTTP request', () => {
     expect(seenAuth.length).toBeGreaterThan(0)
     for (const auth of seenAuth) expect(auth).toBe('Bearer e2e-test-token')
+  })
+})
+
+// ---- Stale-session self-healing (server restart under a live session) ----
+
+describe('streamable-http — server restart under a live session', () => {
+  let ctx: Context
+  let httpServer: Server
+  let sessionServer: McpServer | undefined
+  let sessionTransport: StreamableHTTPServerTransport | undefined
+  let port = 0
+
+  /** Capture the supervisor's logger lines by level on one context. */
+  function captureLogs(c: Context): { warns: string[]; errors: string[]; infos: string[] } {
+    const warns: string[] = []
+    const errors: string[] = []
+    const infos: string[] = []
+    c.logger.warn = ((message: unknown) => { warns.push(String(message)) }) as typeof c.logger.warn
+    c.logger.error = ((message: unknown) => { errors.push(String(message)) }) as typeof c.logger.error
+    c.logger.info = ((message: unknown) => { infos.push(String(message)) }) as typeof c.logger.info
+    return { warns, errors, infos }
+  }
+
+  /**
+   * Stateful single-session endpoint: one McpServer + session-issued
+   * StreamableHTTPServerTransport. The SDK server transport answers a request
+   * whose `mcp-session-id` it does not know with HTTP 404 "Session not found"
+   * — the exact stale-session rejection a real server produces after restart.
+   */
+  async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (sessionTransport === undefined) {
+      sessionServer = new McpServer(
+        { name: 'restart-fixture', version: '1.0.0' },
+        { capabilities: { tools: {} } },
+      )
+      sessionServer.registerTool('ping', {
+        description: 'Replies pong.',
+        inputSchema: {},
+      }, async () => ({
+        content: [{ type: 'text', text: 'pong' }],
+      }))
+      sessionTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
+      await sessionServer.connect(sessionTransport as Transport)
+    }
+    await sessionTransport.handleRequest(req, res)
+  }
+
+  async function listen(): Promise<void> {
+    httpServer = createServer((req, res) => {
+      handleMcpRequest(req, res).catch((error: unknown) => {
+        res.writeHead(500).end(String(error))
+      })
+    })
+    const gate: PromiseWithResolvers<void> = Promise.withResolvers()
+    httpServer.listen(port, '127.0.0.1', gate.resolve)
+    await gate.promise
+  }
+
+  /** Simulate a server-process restart: the new process holds an empty session table. */
+  async function restartServer(): Promise<void> {
+    const closing: PromiseWithResolvers<void> = Promise.withResolvers()
+    httpServer.closeAllConnections()
+    httpServer.close(() => closing.resolve())
+    await closing.promise
+    await sessionTransport?.close()
+    await sessionServer?.close()
+    sessionTransport = undefined
+    sessionServer = undefined
+    await listen()
+  }
+
+  function callPing(): Promise<{ isError?: boolean }> {
+    return ctx.tools.execute({
+      signal: testToolSignal,
+      callId: nextCallId(), name: 'mcp__restart__ping', arguments: {},
+    })
+  }
+
+  beforeAll(async () => {
+    await listen()
+    const address = httpServer.address()
+    if (address === null || typeof address === 'string') throw new Error(`expected a TCP AddressInfo, got ${String(address)}`)
+    port = address.port
+
+    ctx = await mountRegistry()
+    const config: Config = {
+      transport: 'streamable-http',
+      serverName: 'restart',
+      url: `http://127.0.0.1:${port}/mcp`,
+      headers: {},
+      toolCallTimeoutMs: 15_000,
+      failOnStartupError: false,
+      reconnect: { initialDelayMs: 50, maxDelayMs: 200, maxAttempts: 6 },
+    }
+    await apply(ctx, config)
+  }, 30_000)
+
+  afterAll(async () => {
+    if (ctx) await ctx.fiber.dispose()
+    await sleep(200)
+    if (httpServer !== undefined) {
+      httpServer.closeAllConnections()
+      const closed: PromiseWithResolvers<void> = Promise.withResolvers()
+      httpServer.close(() => closed.resolve())
+      await closed.promise
+    }
+  })
+
+  it('the stale-session call fails as the probe, then the supervisor recovers unattended', async () => {
+    const { warns, infos } = captureLogs(ctx)
+    const first = await callPing()
+    expect(first.isError).toBe(false)
+
+    await restartServer()
+
+    // Between calls there is no connection to an HTTP session, so the restart
+    // is discoverable only by using the stored session id: this call is the
+    // probe and fails at the model-facing edge.
+    const probe = await callPing()
+    expect(probe.isError).toBe(true)
+
+    // The same transport failure informs the supervisor: it recycles the
+    // generation with a fresh initialize handshake, no reload or restart.
+    await vi.waitFor(() => {
+      expect(warns.filter(line => line.includes('request transport failed, recycling the connection'))).toHaveLength(1)
+    })
+
+    // The next attempt lands on the re-handshaked session. Server-push channel
+    // churn from the restart (disconnected stream, failed resumptions) must
+    // stay informational and never add a recycling decision.
+    await vi.waitFor(async () => {
+      const retry = await callPing()
+      expect(retry.isError).toBe(false)
+    }, { timeout: 10_000, interval: 100 })
+    expect(infos.some(line => line.includes('reconnected and re-synced tools'))).toBe(true)
+    expect(warns.filter(line => line.includes('request transport failed, recycling the connection'))).toHaveLength(1)
   })
 })

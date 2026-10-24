@@ -15,7 +15,10 @@ import type { Config } from '@deepseek-ai/dsh-mcp-client'
 
 // vi.mock factories are hoisted above every import/const, so the mock fns and
 // class must be created inside vi.hoisted to exist when the factories run.
-const { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotificationHandler, MockClient, instances } = vi.hoisted(() => {
+const {
+  mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotificationHandler,
+  MockClient, instances, MockTransport, transports,
+} = vi.hoisted(() => {
   const mockConnect = vi.fn<() => Promise<void>>()
   const mockClose = vi.fn<() => Promise<void>>()
   const mockListTools = vi.fn<(_params?: Record<string, unknown>) => Promise<unknown>>()
@@ -41,7 +44,17 @@ const { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotification
     constructor() { instances.push(this) }
   }
   const instances: MockClient[] = []
-  return { mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotificationHandler, MockClient, instances }
+  // Every generation's transport is captured so tests can deliver the errors
+  // the real SDK transports report through their onerror callback.
+  class MockTransport {
+    onerror: ((error: Error) => void) | undefined
+    constructor() { transports.push(this) }
+  }
+  const transports: MockTransport[] = []
+  return {
+    mockConnect, mockClose, mockListTools, mockCallTool, mockSetNotificationHandler,
+    MockClient, instances, MockTransport, transports,
+  }
 })
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -49,11 +62,11 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
 }))
 
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
-  StdioClientTransport: vi.fn(),
+  StdioClientTransport: MockTransport,
 }))
 
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
-  StreamableHTTPClientTransport: vi.fn(),
+  StreamableHTTPClientTransport: MockTransport,
 }))
 
 // vi.mock is hoisted above static imports, so the modules under test see the
@@ -106,6 +119,18 @@ function stdioConfig(reconnect?: Config['reconnect']): Config {
   }
 }
 
+function httpConfig(reconnect?: Config['reconnect']): Config {
+  return {
+    transport: 'streamable-http',
+    serverName: 'srv',
+    url: 'http://127.0.0.1:1/mcp',
+    headers: {},
+    toolCallTimeoutMs: 60_000,
+    failOnStartupError: false,
+    ...reconnect === undefined ? {} : { reconnect },
+  }
+}
+
 /** The tool list the mock server advertises after a successful (re)connect. */
 function listing(...names: string[]): { tools: { name: string; inputSchema: { type: string } }[]; nextCursor: undefined } {
   return {
@@ -127,6 +152,7 @@ describe('reconnect supervisor', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     instances.length = 0
+    transports.length = 0
     mockConnect.mockResolvedValue(undefined)
     mockClose.mockImplementation(function (this: { onclose?: () => void }) {
       this.onclose?.()
@@ -471,6 +497,160 @@ describe('reconnect supervisor', () => {
     const staleHandler = mockSetNotificationHandler.mock.calls[0]![1] as () => Promise<void>
     await staleHandler()
     expect(mockListTools).toHaveBeenCalledTimes(listCalls)
+  })
+})
+
+// ---- Transport-failure-driven recycling ----
+
+describe('transport failure recycling', () => {
+  let ctx: Context
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    instances.length = 0
+    transports.length = 0
+    mockConnect.mockResolvedValue(undefined)
+    mockClose.mockImplementation(function (this: { onclose?: () => void }) {
+      this.onclose?.()
+      return Promise.resolve()
+    })
+    mockListTools.mockResolvedValue(listing('remote'))
+    mockCallTool.mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] })
+    ctx = await mountRegistry()
+  })
+
+  it('recycles the generation when the transport reports a rejected request (restarted HTTP server, stale session)', async () => {
+    const { warns, infos } = captureLogs(ctx)
+    await apply(ctx, httpConfig({ initialDelayMs: 5, maxDelayMs: 40, maxAttempts: 5 }))
+    await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__remote')).toBeDefined() })
+    expect(instances).toHaveLength(1)
+
+    // What a Streamable HTTP client transport reports when a restarted server
+    // answers the next POST with 404 "Session not found": onerror fires and no
+    // close event ever follows, because an HTTP session has no connection to
+    // close. The same error also rejects the caller's request — the model-
+    // visible half of the recovery.
+    mockListTools.mockResolvedValue(listing('revived'))
+    transports[0]!.onerror?.(new Error(
+      'Error POSTing to endpoint: {"jsonrpc":"2.0","id":"server-error","error":{"code":-32001,"message":"Session not found"}}',
+    ))
+
+    await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__revived')).toBeDefined() })
+    expect(instances).toHaveLength(2)
+    expect(mockConnect).toHaveBeenCalledTimes(2)
+    expect(warns.some(line => line.includes('request transport failed, recycling the connection'))).toBe(true)
+    expect(infos.some(line => line.includes('reconnected and re-synced tools'))).toBe(true)
+
+    // Post-recovery calls execute through the re-registered definition.
+    const result = await ctx.tools.execute({
+      signal: testToolSignal,
+      callId: nextCallId(), name: 'mcp__srv__revived', arguments: {},
+    })
+    expect(result.isError).toBe(false)
+  })
+
+  it('logs server-push channel failures without recycling the request path', async () => {
+    const { warns, infos } = captureLogs(ctx)
+    await apply(ctx, httpConfig())
+    await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__remote')).toBeDefined() })
+
+    // The SDK's own wrapped SSE-channel messages; the transport resumes this
+    // optional channel itself, and POST requests remain usable throughout.
+    for (const message of [
+      'Failed to open SSE stream: Not Found',
+      'SSE stream disconnected: Error: read aborted',
+      'Failed to reconnect SSE stream: StreamableHTTPError: Failed to open SSE stream: Not Found',
+      'Maximum reconnection attempts (2) exceeded.',
+    ]) {
+      transports[0]!.onerror?.(new Error(message))
+    }
+    await sleep(30)
+    expect(instances).toHaveLength(1)
+    expect(mockConnect).toHaveBeenCalledTimes(1)
+    expect(warns.filter(line => line.includes('recycling the connection'))).toHaveLength(0)
+    expect(infos.filter(line => line.includes('server-push channel failed'))).toHaveLength(4)
+    expect(ctx.tools.get('mcp__srv__remote')).toBeDefined()
+  })
+
+  it('leaves an attempt-phase transport failure to the startup reconnect path', async () => {
+    const { warns } = captureLogs(ctx)
+    const gate: PromiseWithResolvers<void> = Promise.withResolvers()
+    mockConnect.mockImplementationOnce(() => gate.promise)
+    const applying = apply(ctx, httpConfig({ initialDelayMs: 2, maxDelayMs: 8, maxAttempts: 2 }))
+    await vi.waitFor(() => { expect(instances).toHaveLength(1) })
+
+    transports[0]!.onerror?.(new Error('Error POSTing to endpoint: initialize rejected'))
+    // The recycling hook is not armed before the attempt settles.
+    expect(mockClose).not.toHaveBeenCalled()
+
+    gate.resolve()
+    await applying
+    await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__remote')).toBeDefined() })
+    expect(instances).toHaveLength(1)
+    expect(warns.filter(line => line.includes('recycling the connection'))).toHaveLength(0)
+  })
+
+  it('recycles once and stops reconnecting when the recycled generation never reports that it closed', async () => {
+    vi.useFakeTimers()
+    try {
+      const { warns, errors } = captureLogs(ctx)
+      // Close rejects and the transport never reports closure: the recycled
+      // generation cannot be proven gone.
+      mockClose.mockRejectedValue(new Error('close failed'))
+      const applying = apply(ctx, httpConfig({ initialDelayMs: 2, maxDelayMs: 8, maxAttempts: 2 }))
+      await vi.advanceTimersByTimeAsync(10)
+      await applying
+
+      transports[0]!.onerror?.(new Error('Stdio transport is closed.'))
+      transports[0]!.onerror?.(new Error('Stdio transport is closed.'))
+      expect(warns.filter(line => line.includes('recycling the connection'))).toHaveLength(1)
+      expect(mockClose).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(errors.some(line => line.includes('reconnect stopped to avoid overlapping server processes'))).toBe(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(instances).toHaveLength(1)
+      expect(mockConnect).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a recycled generation that never reports closure is silent after disposal', async () => {
+    vi.useFakeTimers()
+    try {
+      const { errors } = captureLogs(ctx)
+      mockClose.mockResolvedValue(undefined)
+      const fiber = ctx.plugin({ name: 'mcp-client', inject: ['tools'], apply }, httpConfig())
+      await vi.advanceTimersByTimeAsync(10)
+
+      transports[0]!.onerror?.(new Error('Error POSTing to endpoint: gone'))
+      const disposing = fiber.dispose()
+      await vi.advanceTimersByTimeAsync(6_000)
+      await disposing
+
+      // Disposal owns the outcome; the recycling hook adds no second verdict.
+      expect(errors.some(line => line.includes('reconnect stopped to avoid overlapping server processes'))).toBe(false)
+      expect(errors.some(line => line.includes('server shutdown may be incomplete'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a transport failure from a replaced generation is ignored', async () => {
+    const { warns } = captureLogs(ctx)
+    await apply(ctx, httpConfig({ initialDelayMs: 2, maxDelayMs: 8, maxAttempts: 5 }))
+    await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__remote')).toBeDefined() })
+
+    instances[0]!.onclose?.()
+    await vi.waitFor(() => { expect(instances).toHaveLength(2) })
+    await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__remote')).toBeDefined() })
+
+    transports[0]!.onerror?.(new Error('Error POSTing to endpoint: stale'))
+    await sleep(30)
+    expect(instances).toHaveLength(2)
+    expect(mockConnect).toHaveBeenCalledTimes(2)
+    expect(warns.filter(line => line.includes('recycling the connection'))).toHaveLength(0)
   })
 })
 
