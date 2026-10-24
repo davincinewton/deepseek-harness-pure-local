@@ -143,6 +143,8 @@ Docs accompany every code change: update affected README and JSDoc contracts tog
 
 **English-only docs (this checkout):** update English sources only; never touch `.zh.md` counterparts or `*.i18n.yaml` records — pairing-gate failures are expected.
 
+**No `.md` updates (this checkout):** a change ships as code and tests with a detailed commit message; do not edit or add `README.md`, Agent Notes, or other documentation Markdown as part of a change. The documentation mandates above (Agent Note in the same PR, README-and-JSDoc-together, doc-sync evidence) are lifted for this rule; the commit message carries what the docs would have held — root cause, mechanism and invariants, alternatives and why they lost, and the verification actually run. Only this rule's own text and a direct user request may change documentation files.
+
 ## Editing these instructions
 
 `CLAUDE.md` symlinks `AGENTS.md` at root, `packages/`, and `examples/`; edit the real file. Keep each rule self-contained while linking high-level docs. Condense when clarity survives; raise a `verify-doc-budgets` ceiling when the required content genuinely needs more space.
