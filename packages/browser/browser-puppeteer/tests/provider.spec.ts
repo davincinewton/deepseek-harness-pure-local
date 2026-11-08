@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,7 +50,7 @@ const browsersMock = {
   detectBrowserPlatform: vi.fn((): string | undefined => 'linux'),
   getInstalledBrowsers: vi.fn(async (_opts?: unknown): Promise<{ browser: string; buildId: string; executablePath: string }[]> => []),
   resolveBuildId: vi.fn(async () => '145.0.7632.77'),
-  install: vi.fn(async () => ({ executablePath: '/fake/chrome-headless-shell' })),
+  install: vi.fn(async (_opts?: { downloadProgressCallback?: (downloaded: number, total: number) => void }): Promise<{ executablePath: string }> => ({ executablePath: '/fake/chrome-headless-shell' })),
 }
 
 vi.mock('@puppeteer/browsers', () => browsersMock)
@@ -335,21 +335,49 @@ describe('PuppeteerBrowserProvider lifecycle', () => {
 })
 
 describe('provisioning', () => {
+  /** A real cache root with the given executable files created inside it. */
+  async function cacheWith(files: string[]): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-browser-cache-'))
+    for (const file of files) await writeFile(join(dir, file), '#!/bin/sh\n', { mode: 0o755 })
+    return dir
+  }
+
   it('uses a cached build when present', async () => {
-    browsersMock.getInstalledBrowsers.mockResolvedValueOnce([
-      { browser: 'chrome-headless-shell', buildId: '144.0.1', executablePath: '/cache/144' },
-      { browser: 'chrome-headless-shell', buildId: '145.0.2', executablePath: '/cache/145' },
+    const cache = await cacheWith(['144', '145'])
+    browsersMock.getInstalledBrowsers.mockResolvedValue([
+      { browser: 'chrome-headless-shell', buildId: '144.0.1', executablePath: join(cache, '144') },
+      { browser: 'chrome-headless-shell', buildId: '145.0.2', executablePath: join(cache, '145') },
     ])
-    const found = await plugin.findInstalledExecutable('/cache')
-    expect(found).toBe('/cache/145')
+    expect(await plugin.findInstalledExecutable(cache)).toBe(join(cache, '145'))
+    expect(await plugin.provisionExecutable({ cacheDir: cache })).toBe(join(cache, '145'))
+    expect(browsersMock.install).not.toHaveBeenCalled()
+    await rm(cache, { recursive: true, force: true })
   })
 
   it('honors an exact buildId filter', async () => {
+    const cache = await cacheWith(['144'])
     browsersMock.getInstalledBrowsers.mockResolvedValue([
-      { browser: 'chrome-headless-shell', buildId: '144.0.1', executablePath: '/cache/144' },
+      { browser: 'chrome-headless-shell', buildId: '144.0.1', executablePath: join(cache, '144') },
     ])
-    expect(await plugin.findInstalledExecutable('/cache', '145.0.2')).toBeUndefined()
-    expect(await plugin.findInstalledExecutable('/cache', '144.0.1')).toBe('/cache/144')
+    expect(await plugin.findInstalledExecutable(cache, '145.0.2')).toBeUndefined()
+    expect(await plugin.findInstalledExecutable(cache, '144.0.1')).toBe(join(cache, '144'))
+    await rm(cache, { recursive: true, force: true })
+  })
+
+  it('treats a build directory whose executable is missing as a cache miss and downloads', async () => {
+    // An interrupted download leaves the build directory behind with no binary;
+    // the stale directory must not suppress the first-run download.
+    const cache = await mkdtemp(join(tmpdir(), 'dsh-browser-cache-'))
+    browsersMock.getInstalledBrowsers.mockResolvedValue([
+      { browser: 'chrome-headless-shell', buildId: '145.0.2', executablePath: join(cache, '145') },
+    ])
+    expect(await plugin.findInstalledExecutable(cache)).toBeUndefined()
+    const logs: string[] = []
+    const path = await plugin.provisionExecutable({ cacheDir: cache, log: message => logs.push(message) })
+    expect(path).toBe('/fake/chrome-headless-shell')
+    expect(browsersMock.install).toHaveBeenCalledTimes(1)
+    expect(logs.join('\n')).toContain('100 MB')
+    await rm(cache, { recursive: true, force: true })
   })
 
   it('downloads when nothing is cached and reports the progress line', async () => {
@@ -361,8 +389,28 @@ describe('provisioning', () => {
     expect(logs.join('\n')).toContain('100 MB')
   })
 
-  it('fails loud on an unsupported platform or a download error', async () => {
+  it('treats a cache listing that fails to read as empty', async () => {
+    browsersMock.getInstalledBrowsers.mockRejectedValueOnce(new Error('EACCES'))
+    expect(await plugin.findInstalledExecutable('/cache')).toBeUndefined()
+  })
+
+  it('reports the completed download through the progress callback', async () => {
+    type InstallOptions = { downloadProgressCallback?: (downloaded: number, total: number) => void }
+    browsersMock.install.mockImplementationOnce(async (options?: InstallOptions) => {
+      options?.downloadProgressCallback?.(0, 100)
+      options?.downloadProgressCallback?.(100, 100)
+      return { executablePath: '/fake/chrome-headless-shell' }
+    })
+    const logs: string[] = []
+    await plugin.provisionExecutable({ cacheDir: '/cache', log: message => logs.push(message) })
+    expect(logs.join('\n')).toContain('downloaded Chrome Headless Shell 145.0.7632.77 (100 bytes)')
+  })
+
+  it('fails loud on an unsupported platform, an unresolvable build, or a download error', async () => {
     browsersMock.detectBrowserPlatform.mockReturnValueOnce(undefined)
+    await expect(plugin.provisionExecutable({ cacheDir: '/cache' }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVISION_FAILED' }))
+    browsersMock.resolveBuildId.mockRejectedValueOnce(new Error('ECONNREFUSED'))
     await expect(plugin.provisionExecutable({ cacheDir: '/cache' }))
       .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVISION_FAILED' }))
     browsersMock.install.mockRejectedValueOnce(new Error('ECONNREFUSED'))

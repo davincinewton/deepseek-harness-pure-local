@@ -8,6 +8,7 @@
  * @module @deepseek-ai/dsh-browser-puppeteer/provision
  */
 
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Browser, detectBrowserPlatform, getInstalledBrowsers, install, resolveBuildId } from '@puppeteer/browsers'
@@ -22,7 +23,11 @@ export type ProvisionLog = (message: string) => void
 /**
  * Find an installed Chrome Headless Shell executable. Without `buildId` the
  * newest installed build wins; with one, only that build matches. Returns
- * `undefined` when nothing usable is cached (missing cache directory included).
+ * `undefined` when nothing usable is cached (missing cache directory
+ * included). `@puppeteer/browsers` lists build directories without checking
+ * the binary, so an entry whose executable file is absent — e.g. the empty
+ * directory an interrupted download leaves behind — is ignored rather than
+ * reported as a cache hit.
  *
  * @param cacheDir - the `@puppeteer/browsers` cache root.
  * @param buildId - optional exact build to match.
@@ -35,7 +40,8 @@ export async function findInstalledExecutable(cacheDir: string, buildId?: string
   } catch {
     return undefined
   }
-  const shells = installed.filter(entry => entry.browser === Browser.CHROMEHEADLESSSHELL)
+  const shells = installed.filter(entry =>
+    entry.browser === Browser.CHROMEHEADLESSSHELL && existsSync(entry.executablePath))
   const matching = buildId === undefined ? shells : shells.filter(entry => entry.buildId === buildId)
   const [newest] = [...matching].sort((a, b) => b.buildId.localeCompare(a.buildId, undefined, { numeric: true }))
   return newest?.executablePath
