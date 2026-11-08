@@ -782,6 +782,22 @@
       "ignoreDependencies": [
         "@deepseek-ai/.+"
       ]
+    },
+    "packages/browser/browser": {
+      "entry": [
+        "tests/**/*.spec.ts"
+      ]
+    },
+    "packages/browser/browser-puppeteer": {
+      "entry": [
+        "tests/**/*.spec.ts",
+        "tests/**/*.e2e.ts"
+      ]
+    },
+    "packages/browser/tool-browser": {
+      "entry": [
+        "tests/**/*.spec.ts"
+      ]
     }
   }
 }

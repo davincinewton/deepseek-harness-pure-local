@@ -648,7 +648,7 @@ async start(name: string, request: SubagentStartRequest): Promise<SubagentRun>
 
 Types: [Agent](core.md) · [ContentBlock](llm-streaming.md) · [MessageId](llm-streaming.md) · [SessionId](core.md)
 
-Source: [`packages/subagent/subagent/src/index.ts:171`](../../packages/subagent/subagent/src/index.ts)
+Source: [`packages/subagent/subagent/src/index.ts:191`](../../packages/subagent/subagent/src/index.ts)
 
 <a id="subagent-events"></a>
 

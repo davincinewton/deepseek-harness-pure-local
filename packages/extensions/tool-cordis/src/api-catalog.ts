@@ -385,6 +385,55 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'browser',
+    summary: 'The browser automation service.',
+    description: 'The browser automation service. Registered as `ctx.browser` (one instance per context).\n\nSelection semantics (resolved at execution time, never order-dependent):\n\n- A configured id that is registered and `available()` → that provider.\n- A configured id not registered → `BROWSER_PROVIDER_CONFIGURED_MISSING`.\n- A configured id registered but unavailable → `BROWSER_PROVIDER_CONFIGURED_UNAVAILABLE`.\n- No id configured, exactly one registered usable provider → that provider.\n- No id configured, multiple usable providers → `BROWSER_PROVIDER_AMBIGUOUS`.\n- No id configured, no usable provider → `BROWSER_PROVIDER_UNAVAILABLE`.',
+    methods: [
+      {
+        signature: 'registerProvider(provider: BrowserProvider): () => void',
+        description: 'Register a page-operation provider. Throws BrowserError `BROWSER_DUPLICATE_PROVIDER` if its id is already registered. Returns a disposer; disposed with the calling fiber.',
+        parameters: [{ name: 'provider', description: 'the provider; its `id` is the registry key.' }],
+        returns: 'the disposer that unregisters the provider.',
+      },
+      {
+        signature: 'async navigate(pageKey: BrowserPageKey, request: BrowserNavigateRequest, signal?: AbortSignal): Promise<BrowserNavigateResult>',
+        description: 'Navigate the key\'s page through the selected provider. Resolves the provider at call time with the selection rules above; throws BrowserError when the capability cannot run.',
+        parameters: [{ name: 'pageKey', description: 'the Consumer-derived page owner.' }, { name: 'request', description: 'the navigation target and settle condition.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        returns: 'the post-navigation page status.',
+      },
+      {
+        signature: 'async snapshot(pageKey: BrowserPageKey, limits: BrowserSnapshotLimits, signal?: AbortSignal): Promise<BrowserSnapshotResult>',
+        description: 'Snapshot the key\'s page through the selected provider. The seam enforces `limits` on the provider result: text is cut to `maxTextChars`, elements to `maxElements`, and `truncated` reflects either cut.',
+        parameters: [{ name: 'pageKey', description: 'the page owner.' }, { name: 'limits', description: 'the Consumer\'s model budget for this snapshot.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        returns: 'the bounded page state.',
+      },
+      {
+        signature: 'async act(pageKey: BrowserPageKey, request: BrowserActRequest, signal?: AbortSignal): Promise<BrowserActResult>',
+        description: 'Perform one page mutation through the selected provider.',
+        parameters: [{ name: 'pageKey', description: 'the page owner.' }, { name: 'request', description: 'the action, target selector, and optional value.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        returns: 'the post-action page status.',
+      },
+      {
+        signature: 'async extract(pageKey: BrowserPageKey, request: BrowserExtractRequest, signal?: AbortSignal): Promise<BrowserExtractResult>',
+        description: 'Read text (or one attribute) out of the key\'s page. The seam enforces `request.maxChars` on the result.',
+        parameters: [{ name: 'pageKey', description: 'the page owner.' }, { name: 'request', description: 'the optional selector/attribute plus the character bound.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        returns: 'the read text, capped to `request.maxChars`.',
+      },
+      {
+        signature: 'async screenshot(pageKey: BrowserPageKey, request: BrowserScreenshotRequest, signal?: AbortSignal): Promise<BrowserScreenshotResult>',
+        description: 'Capture the key\'s page as PNG through the selected provider.',
+        parameters: [{ name: 'pageKey', description: 'the page owner.' }, { name: 'request', description: 'whether to capture beyond the viewport.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        returns: 'the PNG bytes and dimensions.',
+      },
+      {
+        signature: 'async close(pageKey: BrowserPageKey): Promise<void>',
+        description: 'Release the key\'s page. With no usable provider nothing can be open, so the call resolves as a no-op instead of failing teardown.',
+        parameters: [{ name: 'pageKey', description: 'the page owner.' }],
+        returns: 'resolves once the provider (if any) released the page.',
+      },
+    ],
+  },
+  {
     key: 'clientModules',
     summary: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap.',
     description: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
@@ -2740,6 +2789,70 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type Branded<B extends string> = string & {\n    readonly [BRAND]: B;\n};',
   },
   {
+    name: 'BrowserActionKind',
+    declaration: 'export type BrowserActionKind = \'click\' | \'fill\' | \'press\' | \'select\';',
+  },
+  {
+    name: 'BrowserActRequest',
+    declaration: 'export interface BrowserActRequest {\n    readonly action: BrowserActionKind;\n    readonly target: string;\n    readonly value?: string;\n}',
+  },
+  {
+    name: 'BrowserActResult',
+    declaration: 'export type BrowserActResult = BrowserPageStatus;',
+  },
+  {
+    name: 'BrowserExtractRequest',
+    declaration: 'export interface BrowserExtractRequest {\n    readonly selector?: string;\n    readonly attribute?: string;\n    readonly maxChars: number;\n}',
+  },
+  {
+    name: 'BrowserExtractResult',
+    declaration: 'export interface BrowserExtractResult {\n    readonly url: string;\n    readonly text: string;\n    readonly truncated: boolean;\n}',
+  },
+  {
+    name: 'BrowserNavigateRequest',
+    declaration: 'export interface BrowserNavigateRequest {\n    readonly url: string;\n    readonly waitUntil?: BrowserWaitUntil;\n}',
+  },
+  {
+    name: 'BrowserNavigateResult',
+    declaration: 'export type BrowserNavigateResult = BrowserPageStatus;',
+  },
+  {
+    name: 'BrowserPageKey',
+    declaration: 'export type BrowserPageKey = Branded<\'dsh-browser/page\'>;',
+  },
+  {
+    name: 'BrowserPageStatus',
+    declaration: 'export interface BrowserPageStatus {\n    readonly url: string;\n    readonly title: string;\n    readonly statusCode: number | null;\n}',
+  },
+  {
+    name: 'BrowserProvider',
+    declaration: 'export interface BrowserProvider {\n    readonly id: string;\n    available(): boolean;\n    navigate(pageKey: BrowserPageKey, request: BrowserNavigateRequest, signal?: AbortSignal): Promise<BrowserNavigateResult>;\n    snapshot(pageKey: BrowserPageKey, limits: BrowserSnapshotLimits, signal?: AbortSignal): Promise<BrowserSnapshotResult>;\n    act(pageKey: BrowserPageKey, request: BrowserActRequest, signal?: AbortSignal): Promise<BrowserActResult>;\n    extract(pageKey: BrowserPageKey, request: BrowserExtractRequest, signal?: AbortSignal): Promise<BrowserExtractResult>;\n    screenshot(pageKey: BrowserPageKey, request: BrowserScreenshotRequest, signal?: AbortSignal): Promise<BrowserScreenshotResult>;\n    close(pageKey: BrowserPageKey): Promise<void>;\n}',
+  },
+  {
+    name: 'BrowserScreenshotRequest',
+    declaration: 'export interface BrowserScreenshotRequest {\n    readonly fullPage?: boolean;\n}',
+  },
+  {
+    name: 'BrowserScreenshotResult',
+    declaration: 'export interface BrowserScreenshotResult {\n    readonly url: string;\n    readonly data: Uint8Array;\n    readonly mediaType: \'image/png\';\n    readonly bytes: number;\n    readonly width: number;\n    readonly height: number;\n}',
+  },
+  {
+    name: 'BrowserSnapshotElement',
+    declaration: 'export interface BrowserSnapshotElement {\n    readonly role: string;\n    readonly name?: string;\n    readonly type?: string;\n}',
+  },
+  {
+    name: 'BrowserSnapshotLimits',
+    declaration: 'export interface BrowserSnapshotLimits {\n    readonly maxTextChars: number;\n    readonly maxElements: number;\n}',
+  },
+  {
+    name: 'BrowserSnapshotResult',
+    declaration: 'export interface BrowserSnapshotResult extends BrowserPageStatus {\n    readonly text: string;\n    readonly elements: readonly BrowserSnapshotElement[];\n    readonly truncated: boolean;\n}',
+  },
+  {
+    name: 'BrowserWaitUntil',
+    declaration: 'export type BrowserWaitUntil = \'load\' | \'domcontentloaded\' | \'networkidle2\';',
+  },
+  {
     name: 'CancelOptions',
     declaration: 'export interface CancelOptions {\n    keepInbox?: boolean | undefined;\n}',
   },
@@ -4116,6 +4229,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SubagentDescriptorData = OneShotSubagentDescriptorData | ContinuableSubagentDescriptorData;',
   },
   {
+    name: 'SubagentFiring',
+    declaration: 'export type SubagentFiring = \'enabled\' | \'disabled\';',
+  },
+  {
     name: 'SubagentFollowupOptions',
     declaration: 'export interface SubagentFollowupOptions {\n    readonly source: MessageSource;\n    readonly signal: AbortSignal;\n}',
   },
@@ -4157,7 +4274,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentRuntime',
-    declaration: 'export class SubagentRuntime extends Service {\n    constructor(ctx: Context);\n    async startContinuable(spec: ContinuableStartSpec): Promise<ContinuableStart>;\n    async followup(parent: Agent, childId: SessionId, content: ContentBlock[], options: SubagentFollowupOptions): Promise<MessageId>;\n    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n    async reportFrom(child: Agent, content: ContentBlock[], options: SubagentReportOptions): Promise<MessageId>;\n    registerContinuableSetup(contribution: ContinuableSetupContribution): () => void;\n    async drainContinuableDescendants(parents: readonly Agent[]): Promise<void>;\n    listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<SubagentListEntry[]>;\n    listDescendants(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentDescendantListEntry[]>;\n    registerProvider(provider: SubagentProvider): () => void;\n    getProvider(name: string): SubagentProvider | undefined;\n    list(): string[];\n    async start(name: string, request: SubagentStartRequest): Promise<SubagentRun>;\n}',
+    declaration: 'export class SubagentRuntime extends Service {\n    constructor(ctx: Context, config: SubagentRuntimeConfig = {});\n    async startContinuable(spec: ContinuableStartSpec): Promise<ContinuableStart>;\n    async followup(parent: Agent, childId: SessionId, content: ContentBlock[], options: SubagentFollowupOptions): Promise<MessageId>;\n    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n    async reportFrom(child: Agent, content: ContentBlock[], options: SubagentReportOptions): Promise<MessageId>;\n    registerContinuableSetup(contribution: ContinuableSetupContribution): () => void;\n    async drainContinuableDescendants(parents: readonly Agent[]): Promise<void>;\n    listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<SubagentListEntry[]>;\n    listDescendants(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentDescendantListEntry[]>;\n    registerProvider(provider: SubagentProvider): () => void;\n    getProvider(name: string): SubagentProvider | undefined;\n    list(): string[];\n    async start(name: string, request: SubagentStartRequest): Promise<SubagentRun>;\n}',
+  },
+  {
+    name: 'SubagentRuntimeConfig',
+    declaration: 'export interface SubagentRuntimeConfig {\n    subagentFiring?: SubagentFiring;\n}',
   },
   {
     name: 'SubagentStartRequest',

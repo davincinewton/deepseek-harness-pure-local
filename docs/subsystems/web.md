@@ -139,6 +139,92 @@ Selection never depends on registration, config, or HMR order: a capability has 
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — this section is byte-identical in both language sides of the page. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxbrowser--browserruntime"></a>
+
+### `ctx.browser` — `BrowserRuntime`
+
+The browser automation service. Registered as `ctx.browser` (one instance per context).
+
+Selection semantics (resolved at execution time, never order-dependent):
+
+- A configured id that is registered and `available()` → that provider.
+- A configured id not registered → `BROWSER_PROVIDER_CONFIGURED_MISSING`.
+- A configured id registered but unavailable → `BROWSER_PROVIDER_CONFIGURED_UNAVAILABLE`.
+- No id configured, exactly one registered usable provider → that provider.
+- No id configured, multiple usable providers → `BROWSER_PROVIDER_AMBIGUOUS`.
+- No id configured, no usable provider → `BROWSER_PROVIDER_UNAVAILABLE`.
+
+```ts cordis-catalog
+/**
+ * Register a page-operation provider. Throws {@link BrowserError}
+ * `BROWSER_DUPLICATE_PROVIDER` if its id is already registered. Returns a
+ * disposer; disposed with the calling fiber.
+ * @param provider - the provider; its `id` is the registry key.
+ * @returns the disposer that unregisters the provider.
+ */
+registerProvider(provider: BrowserProvider): () => void
+
+/**
+ * Navigate the key's page through the selected provider. Resolves the
+ * provider at call time with the selection rules above; throws
+ * {@link BrowserError} when the capability cannot run.
+ * @param pageKey - the Consumer-derived page owner.
+ * @param request - the navigation target and settle condition.
+ * @param signal - optional cancellation signal forwarded to the provider.
+ * @returns the post-navigation page status.
+ */
+async navigate(pageKey: BrowserPageKey, request: BrowserNavigateRequest, signal?: AbortSignal): Promise<BrowserNavigateResult>
+
+/**
+ * Snapshot the key's page through the selected provider. The seam enforces
+ * `limits` on the provider result: text is cut to `maxTextChars`, elements to
+ * `maxElements`, and `truncated` reflects either cut.
+ * @param pageKey - the page owner.
+ * @param limits - the Consumer's model budget for this snapshot.
+ * @param signal - optional cancellation signal forwarded to the provider.
+ * @returns the bounded page state.
+ */
+async snapshot(pageKey: BrowserPageKey, limits: BrowserSnapshotLimits, signal?: AbortSignal): Promise<BrowserSnapshotResult>
+
+/**
+ * Perform one page mutation through the selected provider.
+ * @param pageKey - the page owner.
+ * @param request - the action, target selector, and optional value.
+ * @param signal - optional cancellation signal forwarded to the provider.
+ * @returns the post-action page status.
+ */
+async act(pageKey: BrowserPageKey, request: BrowserActRequest, signal?: AbortSignal): Promise<BrowserActResult>
+
+/**
+ * Read text (or one attribute) out of the key's page. The seam enforces
+ * `request.maxChars` on the result.
+ * @param pageKey - the page owner.
+ * @param request - the optional selector/attribute plus the character bound.
+ * @param signal - optional cancellation signal forwarded to the provider.
+ * @returns the read text, capped to `request.maxChars`.
+ */
+async extract(pageKey: BrowserPageKey, request: BrowserExtractRequest, signal?: AbortSignal): Promise<BrowserExtractResult>
+
+/**
+ * Capture the key's page as PNG through the selected provider.
+ * @param pageKey - the page owner.
+ * @param request - whether to capture beyond the viewport.
+ * @param signal - optional cancellation signal forwarded to the provider.
+ * @returns the PNG bytes and dimensions.
+ */
+async screenshot(pageKey: BrowserPageKey, request: BrowserScreenshotRequest, signal?: AbortSignal): Promise<BrowserScreenshotResult>
+
+/**
+ * Release the key's page. With no usable provider nothing can be open, so the
+ * call resolves as a no-op instead of failing teardown.
+ * @param pageKey - the page owner.
+ * @returns resolves once the provider (if any) released the page.
+ */
+async close(pageKey: BrowserPageKey): Promise<void>
+```
+
+Source: [`packages/browser/browser/src/index.ts:80`](../../packages/browser/browser/src/index.ts)
+
 <a id="ctxweb--webruntime"></a>
 
 ### `ctx.web` — `WebRuntime`

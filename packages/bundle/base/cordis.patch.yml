@@ -267,6 +267,20 @@
         transport: streamable-http
         url: http://127.0.0.1:12306/mcp
 
+    # The native browser capability seam (ctx.browser). It coexists with the
+    # mcp-chrome bridge above: the bridge drives the user's real logged-in
+    # Chrome, while the seam drives a clean scripted headless page. First use
+    # provisions Chrome Headless Shell into ~/.cache/puppeteer (the check runs
+    # at boot, the download never blocks it); disable the rows to opt out.
+    - id: browser
+      name: '@deepseek-ai/dsh-browser'
+
+    - id: browser-puppeteer
+      name: '@deepseek-ai/dsh-browser-puppeteer'
+
+    - id: tool-browser
+      name: '@deepseek-ai/dsh-tool-browser'
+
     - id: commands
       name: '@deepseek-ai/dsh-commands'
 

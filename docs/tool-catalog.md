@@ -39,6 +39,7 @@ This table connects model-visible tool names to the plugin package and service s
 | `@deepseek-ai/dsh-tool-todo` | `todo_write` | `ctx.tools`, `owning Agent session` | `tool/call`, `todo/write`, `tool/result` | - | todo_write is session-owned state; UIs render the latest todo/write event as a checklist. `allowParallelInProgress` is required with no default, so the catalog states its choice: `true`, whose description invites several `in_progress` items. A deployment choosing `false` receives the same tool with a description asking for exactly one active task. |
 | `@deepseek-ai/dsh-tool-workflow` | `workflow` | `ctx.tools`, `ctx.workflowEngine`, `ctx.systemPrompt`, `a calling Agent (exec.agent parents the script children)` | `tool/call`, `tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-web` | `web_fetch`, `web_search` | `ctx.tools`, `ctx.web`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps. |
+| `@deepseek-ai/dsh-tool-browser` | `browser_act`, `browser_close`, `browser_extract`, `browser_navigate`, `browser_snapshot` | `ctx.tools`, `ctx.browser`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | The browser_* suite addresses one page per session through ctx.browser; browser_act is approval-gated by default and browser_screenshot registers only beside an attachments store. |
 
 <a id="deepseek-aidsh-tool-ask-user"></a>
 
@@ -1871,3 +1872,127 @@ Search the web for current information. Returns an optional summary answer and a
 Source: [`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/index.ts)
 
 web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.
+
+<a id="deepseek-aidsh-tool-browser"></a>
+
+## `@deepseek-ai/dsh-tool-browser`
+
+### `browser_act`
+
+Interact with the managed page: click, fill (type into), press a key on, or select an option of one element. Target it with ::-p-aria(<exact snapshot name>), ::-p-text(<text>), or a CSS selector.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "The interaction to perform.",
+      "enum": [
+        "click",
+        "fill",
+        "press",
+        "select"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "description": "Element address: ::-p-aria(<name>), ::-p-text(<text>), or a CSS selector."
+    },
+    "value": {
+      "type": "string",
+      "description": "Text for \"fill\", key name for \"press\", option value for \"select\". Not used by \"click\"."
+    }
+  },
+  "required": [
+    "action",
+    "target"
+  ]
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_close`
+
+Close the managed browser page for this session. A later browser_navigate opens a fresh one.
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_extract`
+
+Read text from the managed page: the whole body by default, one element with a selector, or one attribute value of that element.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "selector": {
+      "type": "string",
+      "description": "Element address (CSS or ::-p-aria()/::-p-text()). Omit for the whole page body."
+    },
+    "attribute": {
+      "type": "string",
+      "description": "Attribute name to read instead of text (e.g. \"href\", \"src\"). Requires selector."
+    },
+    "maxChars": {
+      "type": "integer",
+      "description": "Upper bound on returned characters. Defaults to (and is capped by) the deployment limit."
+    }
+  }
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_navigate`
+
+Navigate the managed browser page to an HTTP(S) URL and return its final URL, title, and HTTP status. The page persists across browser_* calls; a second call navigates the same page.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "The HTTP(S) URL to open."
+    },
+    "waitUntil": {
+      "type": "string",
+      "description": "Settle condition. Defaults to \"load\"; use \"networkidle2\" for script-heavy pages.",
+      "enum": [
+        "load",
+        "domcontentloaded",
+        "networkidle2"
+      ]
+    }
+  },
+  "required": [
+    "url"
+  ]
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+### `browser_snapshot`
+
+Return the managed page's visible text and its interactive elements (role + accessible name). Address an element later as ::-p-aria(<exact name>) or a CSS selector.
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts`](../packages/browser/tool-browser/src/index.ts)
+
+The browser_* suite addresses one page per session through ctx.browser; browser_act is approval-gated by default and browser_screenshot registers only beside an attachments store.

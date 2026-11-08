@@ -59,6 +59,8 @@ import * as ToolSessionQuery from '@deepseek-ai/dsh-tool-session-query'
 import * as ToolTasks from '@deepseek-ai/dsh-tool-jobs'
 import * as ToolTodo from '@deepseek-ai/dsh-tool-todo'
 import * as ToolSubagent from '@deepseek-ai/dsh-tool-subagent'
+import * as ToolBrowser from '@deepseek-ai/dsh-tool-browser'
+import BrowserRuntime from '@deepseek-ai/dsh-browser'
 import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import VmWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import * as ToolRalph from '@deepseek-ai/dsh-tool-ralph'
@@ -550,6 +552,21 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-tool-browser',
+    dir: 'tool-browser',
+    source: 'packages/browser/tool-browser/src/index.ts',
+    requires: ['ctx.tools', 'ctx.browser', 'ctx.systemPrompt'],
+    writes: ['tool/call', 'tool/result'],
+    async mount(ctx) {
+      // Mount only the seam: tool schemas are provider-independent, and a
+      // catalog boot must not provision or launch a browser binary.
+      await ctx.plugin(BrowserRuntime, {})
+      await ctx.plugin(ToolBrowser, {})
+    },
+    note:
+      'The browser_* suite addresses one page per session through ctx.browser; browser_act is approval-gated by default and browser_screenshot registers only beside an attachments store.',
   },
 ]
 

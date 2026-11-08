@@ -36,6 +36,12 @@ const FILE_REFERENCE_PROMPT = fileURLToPath(new URL(
 const EXPECTED_TOOLS = [
   'ask_user_question',
   'bash',
+  'browser_act',
+  'browser_close',
+  'browser_extract',
+  'browser_navigate',
+  'browser_screenshot',
+  'browser_snapshot',
   'create_goal',
   'edit',
   'exit_plan_mode',
