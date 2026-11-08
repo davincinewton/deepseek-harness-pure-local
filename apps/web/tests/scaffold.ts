@@ -446,6 +446,12 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         url: 'http://127.0.0.1:9/mcp',
       },
     },
+    // The Puppeteer provider's boot prewarm must not reach the network or the
+    // terminal in this keyless lane: `provision: 'off'` keeps it cache-only
+    // and `announce: false` keeps its state lines off stderr (they still
+    // reach the session log). The seam's real-Chrome coverage is the opt-in
+    // packages/browser/browser-puppeteer/tests/real-browser.e2e.ts.
+    { id: 'browser-puppeteer', config: { provision: 'off', announce: false } },
     // fs/bash cwd default to process.cwd(); the gateway injects the same
     // value into session.cwd — chdir below anchors all three to the temp
     // workspace, keeping the composition untouched.

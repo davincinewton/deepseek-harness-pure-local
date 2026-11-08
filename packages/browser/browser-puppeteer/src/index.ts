@@ -64,6 +64,13 @@ export interface Config {
   allowLoopback?: boolean
   /** Hostnames allowed regardless of address class (exact, case-insensitive). */
   allowHosts?: string[]
+  /**
+   * Echo provisioning and launch notices (installed / downloading /
+   * unusable / sandbox fallback) to stderr in addition to the session log,
+   * so `dsh web` and `dsh` terminals show the browser's state at boot.
+   * stderr keeps stdout protocol-clean for JSON-RPC hosts.
+   */
+  announce?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -80,6 +87,7 @@ export const Config: z<Config> = z.object({
   maxEvaluateTextChars: z.number().default(500_000),
   allowLoopback: z.boolean().default(false),
   allowHosts: z.array(z.string()).default([]),
+  announce: z.boolean().default(true),
 })
 
 /** Complete config after schemastery applies every field default. */
@@ -103,8 +111,11 @@ function assertPositiveInteger(name: string, value: number): void {
  * Register the Puppeteer browser provider with `ctx.browser`. Provisioning is
  * kicked off (not awaited) so a first-run download never blocks boot; the
  * tools fail with a structured `BROWSER_PROVISION_FAILED` while the browser is
- * unusable. The provider's teardown is fiber-scoped: disposing the plugin
- * closes pages, quits Chrome, and removes the ephemeral profile.
+ * unusable. Unless `announce: false`, each provisioning and launch notice is
+ * also written to stderr, so the terminal running `dsh web` says at boot
+ * whether the browser is installed, installing, or unusable. The provider's
+ * teardown is fiber-scoped: disposing the plugin closes pages, quits Chrome,
+ * and removes the ephemeral profile.
  */
 export function apply(ctx: Context, config: Config): void {
   // schemastery (Config) has already filled every defaulted field.
@@ -133,7 +144,10 @@ export function apply(ctx: Context, config: Config): void {
       allowLoopback: resolved.allowLoopback,
       allowHosts: resolved.allowHosts,
     },
-    log: (message) => { ctx.logger.info(message) },
+    log: (message) => {
+      ctx.logger.info(message)
+      if (resolved.announce) console.error(message)
+    },
   })
   ctx.browser.registerProvider(provider)
   provider.prewarm()

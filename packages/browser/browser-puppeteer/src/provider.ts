@@ -70,6 +70,76 @@ interface RawSnapshot {
 }
 
 /**
+ * Page-side snapshot body, kept as a string literal rather than a function:
+ * `page.evaluate` serializes functions with `toString()` and runs them in the
+ * page context, so any Node-side transpile helper would be undefined there —
+ * the source launch transpiles with esbuild `keepNames`, which injects
+ * `__name()` calls around named functions. Transpilers never rewrite string
+ * literals, so the compiled {@link SNAPSHOT_PAGE_FUNCTION} is immune to
+ * whatever produced the module. It is compiled rather than passed as a string
+ * because Puppeteer evaluates a string page function as a bare expression and
+ * passes no arguments.
+ */
+const SNAPSHOT_PAGE_SOURCE = `
+  const text = document.body.innerText
+  const selector = 'a[href], button, input, select, textarea, summary, [role], [contenteditable="true"]'
+  const elements = []
+  for (const el of document.querySelectorAll(selector)) {
+    if (elements.length >= maxElements) break
+    if (el.getClientRects().length === 0) continue
+    const role = el.getAttribute('role') ?? roleOf(el)
+    if (role === undefined) continue
+    const name = nameOf(el)
+    const type = typeOf(el)
+    elements.push({ role, ...(name === undefined ? {} : { name }), ...(type === undefined ? {} : { type }) })
+  }
+  function roleOf(el) {
+    const tag = el.tagName.toLowerCase()
+    if (tag === 'a') return 'link'
+    if (tag === 'button') return 'button'
+    if (tag === 'select') return 'combobox'
+    if (tag === 'textarea') return 'textbox'
+    if (tag === 'summary') return 'button'
+    if (tag === 'input') {
+      const type = el.type
+      if (type === 'checkbox' || type === 'radio') return type
+      if (type === 'submit' || type === 'button') return 'button'
+      return 'textbox'
+    }
+    return undefined
+  }
+  function typeOf(el) {
+    return el.tagName.toLowerCase() === 'input' ? el.type : undefined
+  }
+  function nameOf(el) {
+    const direct = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('alt') || el.getAttribute('title')
+    if (direct !== null && direct.trim().length > 0) return collapse(direct)
+    if (el.tagName.toLowerCase() === 'input') {
+      if (el.type === 'submit' || el.type === 'button') return el.value.length > 0 ? collapse(el.value) : undefined
+      return undefined
+    }
+    const text = el.innerText
+    return text.trim().length > 0 ? collapse(text) : undefined
+  }
+  function collapse(value) {
+    const trimmed = value.replace(/\\s+/g, ' ').trim()
+    return trimmed.length > 200 ? trimmed.slice(0, 200) + '…' : trimmed
+  }
+  return { text: text.slice(0, maxText), elements }
+`
+
+/** The page-side snapshot function's signature, as called by the provider. */
+type SnapshotPageFunction = (maxText: number, maxElements: number) => RawSnapshot
+
+/** Compiled once; see {@link SNAPSHOT_PAGE_SOURCE} for why the body is a string. */
+// oxlint-disable-next-line typescript/no-implied-eval -- a string-compiled body is the only transpile-immune page function
+const SNAPSHOT_PAGE_FUNCTION = new Function(
+  'maxText',
+  'maxElements',
+  SNAPSHOT_PAGE_SOURCE,
+) as SnapshotPageFunction
+
+/**
  * The Puppeteer page-operation provider. Registered by the
  * `@deepseek-ai/dsh-browser-puppeteer` plugin; usable directly by tests.
  */
@@ -96,10 +166,13 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
    * Start executable discovery/provisioning without waiting on it, so boot
    * never blocks on a first-run download. Rejections are memoized into the
    * operations that need the executable; `off` mode marks the provider
-   * unusable when no executable exists.
+   * unusable when no executable exists. Every failure is reported through
+   * `log` at boot, so the terminal already says the browser is unusable
+   * instead of waiting for the first operation to surface it.
    */
   prewarm(): void {
-    void this.#ensureExecutable().catch(() => {
+    void this.#ensureExecutable().catch((error: unknown) => {
+      this.#options.log?.(`browser: not available — ${error instanceof BrowserError ? error.message : String(error)}`)
       if (this.#options.provision === 'off') this.#usable = false
     })
   }
@@ -154,55 +227,7 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
     const status = await this.#status(page)
     const raw = await withCancellation(
       page.evaluate(
-        (maxText: number, maxElements: number): RawSnapshot => {
-          const text = document.body.innerText
-          const selector = 'a[href], button, input, select, textarea, summary, [role], [contenteditable="true"]'
-          const elements: RawSnapshot['elements'] = []
-          for (const el of document.querySelectorAll(selector)) {
-            if (elements.length >= maxElements) break
-            if (el.getClientRects().length === 0) continue
-            const html = el as HTMLElement
-            const role = html.getAttribute('role') ?? roleOf(html)
-            if (role === undefined) continue
-            const name = nameOf(html)
-            const type = typeOf(html)
-            elements.push({ role, ...(name === undefined ? {} : { name }), ...(type === undefined ? {} : { type }) })
-          }
-          function roleOf(el: HTMLElement): string | undefined {
-            const tag = el.tagName.toLowerCase()
-            if (tag === 'a') return 'link'
-            if (tag === 'button') return 'button'
-            if (tag === 'select') return 'combobox'
-            if (tag === 'textarea') return 'textbox'
-            if (tag === 'summary') return 'button'
-            if (tag === 'input') {
-              const type = (el as HTMLInputElement).type
-              if (type === 'checkbox' || type === 'radio') return type
-              if (type === 'submit' || type === 'button') return 'button'
-              return 'textbox'
-            }
-            return undefined
-          }
-          function typeOf(el: HTMLElement): string | undefined {
-            return el.tagName.toLowerCase() === 'input' ? (el as HTMLInputElement).type : undefined
-          }
-          function nameOf(el: HTMLElement): string | undefined {
-            const direct = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('alt') || el.getAttribute('title')
-            if (direct !== null && direct.trim().length > 0) return collapse(direct)
-            if (el.tagName.toLowerCase() === 'input') {
-              const input = el as HTMLInputElement
-              if (input.type === 'submit' || input.type === 'button') return input.value.length > 0 ? collapse(input.value) : undefined
-              return undefined
-            }
-            const text = el.innerText
-            return text.trim().length > 0 ? collapse(text) : undefined
-          }
-          function collapse(value: string): string {
-            const trimmed = value.replace(/\s+/g, ' ').trim()
-            return trimmed.length > 200 ? `${trimmed.slice(0, 200)}…` : trimmed
-          }
-          return { text: text.slice(0, maxText), elements }
-        },
+        SNAPSHOT_PAGE_FUNCTION,
         this.#options.maxEvaluateTextChars,
         limits.maxElements,
       ),

@@ -93,6 +93,39 @@ function png(width: number, height: number): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
+/** A real cache root with the given executable files created inside it. */
+async function cacheWith(files: string[]): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-browser-cache-'))
+  for (const file of files) await writeFile(join(dir, file), '#!/bin/sh\n', { mode: 0o755 })
+  return dir
+}
+
+/**
+ * Minimal element stand-in for the snapshot page source: only the DOM surface
+ * it reads (`tagName`, `type`, `value`, `innerText`, `getAttribute`,
+ * `getClientRects`). `hidden` produces an empty client-rect list, the same
+ * visibility signal the page source uses.
+ */
+function fakeElement(init: {
+  tag: string
+  role?: string
+  text?: string
+  type?: string
+  value?: string
+  attrs?: Record<string, string>
+  hidden?: boolean
+}): Record<string, unknown> {
+  return {
+    tagName: init.tag,
+    type: init.type ?? '',
+    value: init.value ?? '',
+    innerText: init.text ?? '',
+    getAttribute: (name: string): string | null =>
+      name === 'role' ? init.role ?? null : init.attrs?.[name] ?? null,
+    getClientRects: (): unknown[] => (init.hidden === true ? [] : [{}]),
+  }
+}
+
 beforeEach(() => {
   launchMock.mockClear()
   browser.close.mockClear()
@@ -240,6 +273,57 @@ describe('PuppeteerBrowserProvider reads', () => {
     await provider.dispose()
   })
 
+  it('sends the snapshot page function compiled from a string, immune to Node-side transpiles', async () => {
+    // The source launch transpiles with esbuild keepNames, which injects
+    // `__name()` calls into serialized functions; the page context has no
+    // such helper. The snapshot page function must therefore come from a
+    // string literal compiled with `new Function` (transpilers never rewrite
+    // strings), not from a written-out function — `new Function` output
+    // serializes as `function anonymous(...)`.
+    const provider = await opened()
+    await provider.snapshot(pageKey, { maxTextChars: 100, maxElements: 10 })
+    const [pageFunction] = page.evaluate.mock.calls[0]!
+    expect(typeof pageFunction).toBe('function')
+    expect(String(pageFunction)).toMatch(/^function anonymous\(/)
+    expect(String(pageFunction)).not.toContain('__name(')
+    await provider.dispose()
+  })
+
+  it('maps roles, accessible names, and caps through the snapshot page source', async () => {
+    const provider = await opened()
+    await provider.snapshot(pageKey, { maxTextChars: 100, maxElements: 10 })
+    const [pageFunction] = page.evaluate.mock.calls[0]!
+    const stub = {
+      body: { innerText: 'page body text' },
+      querySelectorAll: () => [
+        fakeElement({ tag: 'a', text: 'Home' }),
+        fakeElement({ tag: 'input', type: 'text', attrs: { 'aria-label': 'Search   box' } }),
+        fakeElement({ tag: 'span', text: 'no role' }),
+        fakeElement({ tag: 'button', text: '  Lots   of   spaces  ' }),
+        fakeElement({ tag: 'div', role: 'alert', text: 'Heads up' }),
+        fakeElement({ tag: 'div', role: 'alert', text: 'invisible', hidden: true }),
+      ],
+    }
+    type PageSnapshot = (maxText: number, maxElements: number) => { text: string; elements: unknown[] }
+    // oxlint-disable-next-line typescript/no-implied-eval -- re-runs the serialized snapshot source against a DOM stub
+    const compile = new Function('document', `return (${String(pageFunction)})`) as (doc: unknown) => PageSnapshot
+    const evaluate = compile(stub)
+    expect(evaluate(1000, 10)).toEqual({
+      text: 'page body text',
+      elements: [
+        { role: 'link', name: 'Home' },
+        { role: 'textbox', name: 'Search box', type: 'text' },
+        { role: 'button', name: 'Lots of spaces' },
+        { role: 'alert', name: 'Heads up' },
+      ],
+    })
+    // Both budgets bound the page-side result before it crosses the CDP boundary.
+    const capped = evaluate(4, 1)
+    expect(capped.text).toBe('page')
+    expect(capped.elements).toEqual([{ role: 'link', name: 'Home' }])
+    await provider.dispose()
+  })
+
   it('parses screenshot dimensions from the PNG header', async () => {
     page.screenshot.mockResolvedValueOnce(png(1280, 1024))
     const provider = await opened()
@@ -335,13 +419,6 @@ describe('PuppeteerBrowserProvider lifecycle', () => {
 })
 
 describe('provisioning', () => {
-  /** A real cache root with the given executable files created inside it. */
-  async function cacheWith(files: string[]): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'dsh-browser-cache-'))
-    for (const file of files) await writeFile(join(dir, file), '#!/bin/sh\n', { mode: 0o755 })
-    return dir
-  }
-
   it('uses a cached build when present', async () => {
     const cache = await cacheWith(['144', '145'])
     browsersMock.getInstalledBrowsers.mockResolvedValue([
@@ -349,7 +426,9 @@ describe('provisioning', () => {
       { browser: 'chrome-headless-shell', buildId: '145.0.2', executablePath: join(cache, '145') },
     ])
     expect(await plugin.findInstalledExecutable(cache)).toBe(join(cache, '145'))
-    expect(await plugin.provisionExecutable({ cacheDir: cache })).toBe(join(cache, '145'))
+    const logs: string[] = []
+    expect(await plugin.provisionExecutable({ cacheDir: cache, log: message => logs.push(message) })).toBe(join(cache, '145'))
+    expect(logs.join('\n')).toContain('already installed')
     expect(browsersMock.install).not.toHaveBeenCalled()
     await rm(cache, { recursive: true, force: true })
   })
@@ -420,9 +499,14 @@ describe('provisioning', () => {
 
   it('treats "off" mode with no cached build as unusable (loud, structured)', async () => {
     browsersMock.getInstalledBrowsers.mockResolvedValue([])
-    const provider = new PuppeteerBrowserProvider(providerOptions({ executablePath: '', provision: 'off' }))
+    const logs: string[] = []
+    const provider = new PuppeteerBrowserProvider(
+      providerOptions({ executablePath: '', provision: 'off', log: message => logs.push(message) }),
+    )
     provider.prewarm()
     await vi.waitFor(() =>{  expect(provider.available()).toBe(false) })
+    // The boot-time failure is announced, not deferred to the first operation.
+    expect(logs.join('\n')).toContain('not available — Chrome Headless Shell is not present')
     await expect(provider.navigate(pageKey, { url: 'https://example.com' })).rejects.toBeInstanceOf(Error)
     expect(browsersMock.install).not.toHaveBeenCalled()
     await provider.dispose()
@@ -441,6 +525,37 @@ describe('plugin registration (real seam)', () => {
     expect(browser.close).toHaveBeenCalled()
   })
 
+  it('announces the browser state to stderr by default and stays silent when announce is off', async () => {
+    const cache = await cacheWith(['shell'])
+    browsersMock.getInstalledBrowsers.mockResolvedValue([
+      { browser: 'chrome-headless-shell', buildId: '145.0.2', executablePath: join(cache, 'shell') },
+    ])
+    const announced = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const ctx = new Context()
+      await ctx.plugin(BrowserRuntime, {})
+      const fiber = await ctx.plugin(plugin, { executablePath: '', provision: 'off' })
+      await vi.waitFor(() => {
+        expect(announced.mock.calls.flat().map(String).join('\n')).toContain('already installed')
+      })
+      await fiber.dispose()
+
+      announced.mockClear()
+      const quiet = new Context()
+      await quiet.plugin(BrowserRuntime, {})
+      const quietFiber = await quiet.plugin(plugin, { executablePath: '', provision: 'off', announce: false })
+      // The prewarm lookup still runs (session log keeps the line); only the
+      // stderr echo is gated.
+      await vi.waitFor(() => { expect(browsersMock.getInstalledBrowsers).toHaveBeenCalled() })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(announced).not.toHaveBeenCalled()
+      await quietFiber.dispose()
+    } finally {
+      announced.mockRestore()
+      await rm(cache, { recursive: true, force: true })
+    }
+  })
+
   it('rejects an invalid provision value at config validation', async () => {
     const ctx = new Context()
     await ctx.plugin(BrowserRuntime, {})
@@ -453,5 +568,7 @@ describe('plugin registration (real seam)', () => {
     await ctx.plugin(BrowserRuntime, {})
     await expect(ctx.plugin(plugin, { navigationTimeoutMs: 0 }))
       .rejects.toThrow(/navigationTimeoutMs/)
+    await expect(ctx.plugin(plugin, { maxUrlLength: 1.5 }))
+      .rejects.toThrow(/maxUrlLength/)
   })
 })

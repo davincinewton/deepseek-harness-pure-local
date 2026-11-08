@@ -51,9 +51,11 @@ export async function findInstalledExecutable(cacheDir: string, buildId?: string
  * Ensure a Chrome Headless Shell executable exists and return its path.
  * Resolution order: an explicitly configured `buildId` cache hit → newest
  * cached build (no `buildId`) → network install of the requested (or current
- * stable) build. Provisioning failures throw {@link BrowserError}
- * `BROWSER_PROVISION_FAILED` with the network/platform cause chained; nothing
- * is silently skipped.
+ * stable) build. Every outcome reports through `log` (cache hit, download
+ * start, download completion) so a boot can announce its browser state
+ * without the operator polling. Provisioning failures throw
+ * {@link BrowserError} `BROWSER_PROVISION_FAILED` with the network/platform
+ * cause chained; nothing is silently skipped.
  *
  * @param options - cache directory, optional pinned build id, progress sink.
  * @returns the executable path of a present build.
@@ -71,7 +73,10 @@ export async function provisionExecutable(options: {
     throw new BrowserError('no supported browser platform detected for Chrome Headless Shell provisioning', 'BROWSER_PROVISION_FAILED')
   }
   const found = await findInstalledExecutable(cacheDir, buildId)
-  if (found !== undefined) return found
+  if (found !== undefined) {
+    log?.(`browser: Chrome Headless Shell is already installed at ${found}`)
+    return found
+  }
   if (options.provision === 'off') {
     throw new BrowserError(
       'Chrome Headless Shell is not present and provisioning is disabled (provision: "off"); install it, point executablePath at it, or set provision: "auto"',
@@ -87,7 +92,7 @@ export async function provisionExecutable(options: {
   try {
     resolvedBuildId = buildId ?? await resolveBuildId(Browser.CHROMEHEADLESSSHELL, platform, 'stable')
   } catch (error: unknown) {
-    throw new BrowserError('browser: could not resolve a Chrome Headless Shell build (offline? pin buildId in config)', 'BROWSER_PROVISION_FAILED', { cause: error })
+    throw new BrowserError('could not resolve a Chrome Headless Shell build (offline? pin buildId in config)', 'BROWSER_PROVISION_FAILED', { cause: error })
   }
   try {
     const installed = await install({
@@ -100,6 +105,6 @@ export async function provisionExecutable(options: {
     })
     return installed.executablePath
   } catch (error: unknown) {
-    throw new BrowserError(`browser: Chrome Headless Shell ${resolvedBuildId} download failed (offline? pin a cached buildId or set executablePath)`, 'BROWSER_PROVISION_FAILED', { cause: error })
+    throw new BrowserError(`Chrome Headless Shell ${resolvedBuildId} download failed (offline? pin a cached buildId or set executablePath)`, 'BROWSER_PROVISION_FAILED', { cause: error })
   }
 }
