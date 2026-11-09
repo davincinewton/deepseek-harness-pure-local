@@ -21,7 +21,7 @@ Google result `href`s are **opaque `/goto?url=<token>` redirect tokens** — the
 
 ## If the chrome tools are unavailable
 
-If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), this skill cannot run: its output requires browser-based redirect resolution and on-page full-text capture, which the built-in `web_search` tool does not provide. Report that the capability is unavailable because the mcp-chrome bridge is not running, and offer `web_search` as a degraded alternative (snippets only, no resolved URLs or full text). Do not retry chrome calls or loop.
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started): if the managed `browser_*` tools are in the catalog, use the `headless-web-search` skill instead — it emits the same manifest contract on the anonymous headless browser. Otherwise this skill cannot run: its output requires browser-based redirect resolution and on-page full-text capture, which the built-in `web_search` tool does not provide. Report that the capability is unavailable because the mcp-chrome bridge is not running, and offer `web_search` as a degraded alternative (snippets only, no resolved URLs or full text). Do not retry chrome calls or loop.
 
 ## Rules
 

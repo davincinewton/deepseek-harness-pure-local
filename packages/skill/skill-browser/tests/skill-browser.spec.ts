@@ -13,6 +13,9 @@ const SKILL_NAMES = [
   'web-search-chrome',
   'web-search-chrome-url',
   'web-search-multi-engine',
+  'headless-research-report',
+  'headless-web-search',
+  'headless-multi-engine-search',
 ] as const
 
 /** Parse the leading YAML frontmatter block of a skill asset. */
@@ -23,7 +26,7 @@ function frontmatter(raw: string): Record<string, unknown> {
 }
 
 describe('dsh-skill-browser', () => {
-  it('registers the four bundled browser skills and disposes them', async () => {
+  it('registers the seven bundled browser skills and disposes them', async () => {
     const ctx = new Context()
     await ctx.plugin(SkillRegistry)
     const fiber = await ctx.plugin(SkillBrowser)

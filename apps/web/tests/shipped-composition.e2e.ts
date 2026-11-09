@@ -39,9 +39,11 @@ const EXPECTED_TOOLS = [
   'browser_act',
   'browser_close',
   'browser_extract',
+  'browser_extract_list',
   'browser_navigate',
   'browser_screenshot',
   'browser_snapshot',
+  'browser_wait',
   'create_goal',
   'edit',
   'exit_plan_mode',
@@ -194,7 +196,7 @@ it('lets a preset producer reach the background-job registry', async () => {
   }
 }, 120_000)
 
-it('ships the built-in browser capability: mcp-chrome at the default bridge URL and four bundled skills', async () => {
+it('ships the built-in browser capability: mcp-chrome at the default bridge URL and eight bundled skills', async () => {
   // Deployment facts, asserted against the shipped layer stack (no test pins):
   // the base bundle mounts the browser skill provider enabled and the mcp-chrome
   // row at the default bridge URL.
@@ -219,14 +221,18 @@ it('ships the built-in browser capability: mcp-chrome at the default bridge URL 
     // The lane pins mcp-chrome to a dead loopback endpoint, so the bridge is
     // down here by construction: no `mcp__chrome__*` tool appears (the catalog
     // equality in the first test already proves it), while the skill-browser
-    // provider's four bundled skills must still be in the agent's catalog —
-    // the capability is known even when the bridge is down.
+    // provider's seven bundled skills must still be in the agent's catalog —
+    // the mcp-chrome family stays known while the bridge is down, and the
+    // headless family runs on the managed browser tools regardless.
     const skills = await ctx.skills.list({ scope: handle.agent, cwd: scaffold.workspaceCwd })
     expect(skills.map(skill => skill.name).sort()).toEqual(expect.arrayContaining([
       'browser-research-report',
       'web-search-chrome',
       'web-search-chrome-url',
       'web-search-multi-engine',
+      'headless-research-report',
+      'headless-web-search',
+      'headless-multi-engine-search',
     ]))
   } finally {
     await handle.dispose()

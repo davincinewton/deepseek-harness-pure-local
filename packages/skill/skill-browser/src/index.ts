@@ -1,16 +1,19 @@
 /**
  * Bundled browser skill provider.
  *
- * Contributes the four mcp-chrome browser skills — `web-search-chrome`,
- * `web-search-chrome-url`, `web-search-multi-engine`, and
- * `browser-research-report` — to `ctx.skills` from this package's packaged
- * `assets/` directory, so every deployment that mounts the plugin knows the
- * browser capability regardless of its working directory or user skill roots.
- *
- * The skills drive the `mcp__chrome__*` tools that the built-in `mcp-chrome`
- * composition row exposes while the mcp-chrome bridge is running; with the
- * bridge down each skill's body falls back to the built-in `web_search` tool
- * or reports the capability unavailable.
+ * Contributes the seven bundled browser skills to `ctx.skills` from this
+ * package's packaged `assets/` directory, so every deployment that mounts the
+ * plugin knows the browser capability regardless of its working directory or
+ * user skill roots. Two families drive one capability each: the four
+ * mcp-chrome skills (`web-search-chrome`, `web-search-chrome-url`,
+ * `web-search-multi-engine`, `browser-research-report`) drive the
+ * `mcp__chrome__*` tools that the built-in `mcp-chrome` composition row
+ * exposes while the mcp-chrome bridge is running — with the bridge down each
+ * body falls back to the built-in `web_search` tool or reports the capability
+ * unavailable; the three headless skills (`headless-web-search`,
+ * `headless-multi-engine-search`, `headless-research-report`) drive the
+ * built-in managed-browser tools (`browser_*`) and need no bridge or user
+ * browser.
  *
  * @module @deepseek-ai/dsh-skill-browser
  */
@@ -56,6 +59,18 @@ const SHIPPED_SKILLS: readonly ShippedSkill[] = [
   {
     name: 'web-search-multi-engine',
     description: 'Use when a search task needs broader or less biased coverage than a single engine — e.g. "search with multiple engines", "cross-check these results", or when one engine is blocked or its ranking is suspect. Runs the same query through Google, Bing, and DuckDuckGo in the user\'s real Chrome (mcp__chrome__*), merges the three lists with cross-engine dedup and corroboration (each item records which engines returned it), resolves a chosen set into clean real URLs with captured full text, and emits a web-search-chrome-url-compatible JSON manifest plus an engines field per item.',
+  },
+  {
+    name: 'headless-research-report',
+    description: 'Use when the user wants a professional research report on a topic built from browser-based web research (e.g. "make a report on this week\'s crypto news") without using their own Chrome or the mcp-chrome bridge. Runs the full pipeline on the built-in managed headless browser (browser_* tools): scope → topic analysis (coverage map) → segmented search → deep article fetch → synthesis → report. Writes a dated markdown report to the workspace root.',
+  },
+  {
+    name: 'headless-web-search',
+    description: 'Use when search results from the managed headless browser must be handed off to a downstream deep-fetch workflow that runs in a SEPARATE session (or after the browser page is closed), or when the user asks for a browser search that does not touch their own Chrome. Runs a DuckDuckGo search (two pages) on the built-in managed headless browser (browser_* tools; no MCP bridge) — degrading to Bing, then Baidu, when an engine blocks the headless browser — resolves every row to a clean real URL (no click needed on the default engines), captures each chosen page\'s full text while it is on screen, and emits a web-search-chrome-url-compatible JSON manifest of {title, source, date, snippet, url, fullText, published, type} plus an unresolved list with notes.',
+  },
+  {
+    name: 'headless-multi-engine-search',
+    description: 'Use when a search task needs broader or less biased coverage than a single engine — e.g. "search with multiple engines", "cross-check these results" — or when one engine is blocked or its ranking suspect and the mcp-chrome bridge is not available. Runs the same query through DuckDuckGo, Bing, and Baidu on the built-in managed headless browser (browser_* tools; no MCP bridge), merges the three lists with cross-engine dedup and corroboration (each item records which engines returned it), resolves a chosen set into clean real URLs with captured full text, and emits a web-search-chrome-url-compatible JSON manifest plus an engines field per item.',
   },
 ]
 
