@@ -652,6 +652,8 @@ interface PendingApproval {
   toolName: string
   callId?: CallId
   reason?: string
+  /** The asker can record a session grant; the client may answer `'allowed-for-session'`. */
+  allowSession: boolean
   resolve(outcome: ApprovalOutcome): void
 }
 
@@ -666,6 +668,7 @@ function requestedFrame(pending: PendingApproval): RpcRequest<MuxFrame> {
       toolName: pending.toolName,
       ...pending.callId === undefined ? {} : { callId: pending.callId },
       ...pending.reason === undefined ? {} : { reason: pending.reason },
+      ...pending.allowSession ? { allowSession: true } : {},
     },
   }
 }
@@ -1447,6 +1450,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           toolName: req.toolName,
           ...req.callId === undefined ? {} : { callId: req.callId },
           ...req.reason === undefined ? {} : { reason: req.reason },
+          allowSession: req.allowSession === true,
           resolve: settle,
         }
         pendingApprovals.set(pending.rpcId, pending)
@@ -3638,8 +3642,12 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         if (!message.result.ok) return Promise.resolve({ accepted: false, reason: 'bad-response' })
         const parsed = approvalResponsePayloadSchema.safeParse(message.result.value)
         // The payload's audit correlation must match the entry the rpcId routed
-        // to — a mismatched answer is malformed, not merely late.
-        if (!parsed.success || parsed.data.approvalId !== approval.approvalId || parsed.data.sessionId !== approval.sessionId) {
+        // to — a mismatched answer is malformed, not merely late. A session
+        // grant is only answerable on an ask whose asker can record it.
+        if (!parsed.success
+          || parsed.data.approvalId !== approval.approvalId
+          || parsed.data.sessionId !== approval.sessionId
+          || (parsed.data.outcome === 'allowed-for-session' && !approval.allowSession)) {
           return Promise.resolve({ accepted: false, reason: 'bad-response' })
         }
         approval.resolve(parsed.data.outcome)

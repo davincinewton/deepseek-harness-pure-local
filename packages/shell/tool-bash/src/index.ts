@@ -21,7 +21,7 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { ESCALATION_TARGETS, approveEscalation, canonicalPath, decide, parseRules, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
-import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
+import { effectiveGrants, grantCovers, grantSandbox, type SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-shell'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { processOutcome } from './background.ts'
@@ -32,8 +32,11 @@ export const inject = ['tools', 'shell', 'systemPrompt', 'shellEnv']
 
 /** Bash rule text grouped by effect; any group may be omitted. */
 interface BashRulesConfig {
+  /** Rule texts that let matching commands proceed without a prompt. */
   allow?: string[]
+  /** Rule texts that force a prompt for matching commands. */
   ask?: string[]
+  /** Rule texts that block matching commands under every mode. */
   deny?: string[]
 }
 
@@ -349,23 +352,29 @@ export function apply(ctx: Context, config: Config = {}): void {
       validateBashArgs(args)
       // Description is display metadata; workdir defaults to the caller's session.
       const standingPolicy = resolveSandboxPolicy(exec)
+      const session = exec.agent?.session
       // Rules gate first: a deny rule blocks the call under every mode (deny is
       // bypass-proof operator policy), and the allow/ask fold decides whether a
-      // command the fallback would run unconfined needs an approval prompt.
-      const commandDecision = decide(permissionRules, 'bash', { command: args.command })
+      // command the fallback would run unconfined needs an approval prompt. A
+      // session grant the human already made ("allow for session") outranks the
+      // prompt but never a deny rule.
+      const commandDecision = decide(permissionRules, 'bash', { command: args.command }, {
+        granted: standingPolicy !== undefined && session !== undefined
+          && grantCovers(effectiveGrants(session.events), standingPolicy.mode),
+      })
       if (commandDecision === 'deny') {
         throw new Error(`this command is denied by a permission rule: ${args.command}`)
       }
       // No-backend fallback: a confining mode with no usable backend cannot be
-      // confined, so it is gated by the rule decision (read-only commands pass
-      // through without a prompt), then runs unconfined (reported as the
-      // requested mode with enforcement 'none').
+      // confined, so it is gated by the rule decision (read-only and granted
+      // commands pass through without a prompt), then runs unconfined (reported
+      // as the requested mode with enforcement 'none').
       const noBackend = standingPolicy !== undefined
         && standingPolicy.mode !== 'danger-full-access'
         && !ctx.shell.backendAvailable()
       let fallbackOriginalMode: SandboxMode | undefined
       let policy: SandboxExecutionPolicy | undefined
-      if (noBackend && standingPolicy !== undefined) {
+      if (noBackend) {
         if (commandDecision === 'ask') {
           const approval = ctx.get('approval')
           if (approval === undefined || exec.agent === undefined) {
@@ -380,8 +389,13 @@ export function apply(ctx: Context, config: Config = {}): void {
             callId: exec.callId,
             reason: `run a non-read-only command without a sandbox backend: ${args.command}`,
             signal: exec.signal,
+            // The human may allow this session's non-read-only commands once,
+            // which records a durable grant instead of re-prompting per call.
+            allowSession: true,
           })
-          if (outcome !== 'allowed-once') {
+          if (outcome === 'allowed-for-session' && session !== undefined) {
+            grantSandbox(session, { mode: standingPolicy.mode })
+          } else if (outcome !== 'allowed-once') {
             throw new Error(`this command was not approved to run without a sandbox backend (outcome: ${outcome})`)
           }
         }

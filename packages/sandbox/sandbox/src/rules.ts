@@ -59,7 +59,12 @@ export function parsePermissionRule(effect: PermissionEffect, text: string): Per
   return { effect, tool, ...(specifier !== undefined && specifier.length > 0 ? { specifier } : {}) }
 }
 
-/** Parse every rule text in a {@link PermissionRules} set into {@link PermissionRule}s. */
+/**
+ * Parse every rule text in a {@link PermissionRules} set into {@link PermissionRule}s.
+ * @param rules - the three effect lists as written in configuration.
+ * @returns the parsed rules, in deny/ask/allow order per list.
+ * @throws when any text is not `Tool` or `Tool(specifier)`.
+ */
 export function parseRules(rules: PermissionRules): PermissionRule[] {
   const out: PermissionRule[] = []
   for (const text of rules.deny ?? []) out.push(parsePermissionRule('deny', text))
@@ -244,29 +249,44 @@ export interface PermissionSubject {
   file_path?: string
 }
 
-const EFFECT_ORDER: readonly PermissionEffect[] = ['deny', 'ask', 'allow']
+/** Options narrowing one {@link decide} lookup. */
+export interface PermissionDecisionOptions {
+  /**
+   * A session grant covers this call (see `dsh-sandbox-policy/grants`): the
+   * call runs free without a prompt, unless a deny rule blocks it. Deny rules
+   * always outrank a grant — they are the operator's bypass-proof stop — and a
+   * grant also outranks ask rules, which exist only to force the prompt.
+   */
+  granted?: boolean
+}
 
 /**
  * The decision for one tool call under a rule set: effects are tried in
  * deny → ask → allow order regardless of list order; first match wins. A call
  * with no matching rule is `ask` (it prompts), EXCEPT a read-only bash call,
- * which is `allow` (the no-backend fallback's free set).
+ * which is `allow` (the no-backend fallback's free set). A grant-covered call
+ * is `allow` unless a deny rule blocks it, skipping every ask rule.
  * @param rules - the parsed rules.
  * @param tool - the tool name (compared case-insensitively).
  * @param subject - the call's subject (`command` for bash, `file_path` for fs tools).
+ * @param options - the grant coverage narrowing the decision.
  * @returns the decision.
  */
-export function decide(rules: readonly PermissionRule[], tool: string, subject: PermissionSubject): 'allow' | 'ask' | 'deny' {
+export function decide(
+  rules: readonly PermissionRule[],
+  tool: string,
+  subject: PermissionSubject,
+  options: PermissionDecisionOptions = {},
+): 'allow' | 'ask' | 'deny' {
   const subjectText = tool.toLowerCase() === 'bash' ? subject.command : subject.file_path
   if (subjectText === undefined) return 'ask'
   const scoped = rules.filter(rule => rule.tool.toLowerCase() === tool.toLowerCase())
-  for (const effect of EFFECT_ORDER) {
-    for (const rule of scoped) {
-      if (rule.effect !== effect) continue
-      const matches = tool.toLowerCase() === 'bash' ? matchBashRule(rule, subjectText) : matchFsRule(rule, subjectText)
-      if (matches) return effect
-    }
-  }
+  const matches = (rule: PermissionRule): boolean =>
+    tool.toLowerCase() === 'bash' ? matchBashRule(rule, subjectText) : matchFsRule(rule, subjectText)
+  if (scoped.some(rule => rule.effect === 'deny' && matches(rule))) return 'deny'
+  if (options.granted === true) return 'allow'
+  if (scoped.some(rule => rule.effect === 'ask' && matches(rule))) return 'ask'
+  if (scoped.some(rule => rule.effect === 'allow' && matches(rule))) return 'allow'
   // No rule matched: a read-only bash call runs free; everything else prompts.
   if (tool.toLowerCase() === 'bash' && isReadOnlyBashCommand(subjectText)) return 'allow'
   return 'ask'

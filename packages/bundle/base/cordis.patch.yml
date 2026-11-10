@@ -200,6 +200,11 @@
           workspace-write:
             sandbox: workspace-write
             approval: ask
+          auto:
+            sandbox: workspace-write
+            approval: auto
+            name: Auto
+            description: Read-only and allow-listed commands run without prompts; everything else is rejected rather than asked.
           danger-full-access:
             sandbox: danger-full-access
             approval: never

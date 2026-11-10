@@ -778,6 +778,21 @@ describe('ToolRuntime', () => {
       expect(result.content[0]).toMatchObject({ text: 'Error: approval for tool "echo" was cancelled' })
     })
 
+    it('denies a session-grant answer on a seam that owns no grant to record', async () => {
+      // This ask never advertises `allowSession`, so a conforming seam
+      // normalizes the outcome to 'unavailable'; the arm exists so the closed
+      // union stays exhaustive and still fails closed if a non-conforming one
+      // returns it.
+      const ctx = await setup()
+      ctx.provide('approval', { request: async () => 'allowed-for-session' } as never)
+      ctx.tools.register(echoTool)
+      ctx.on('tools/pre-execute', async (): Promise<PreToolDecision> => ({ kind: 'ask' }))
+
+      const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: 'echo', arguments: {}, agent: fakeAgent() })
+      expect(result.isError).toBe(true)
+      expect(result.content[0]).toMatchObject({ text: 'Error: tool "echo" has no session grant to record; allow once instead' })
+    })
+
     it('returns ABORTED_BEFORE_DISPATCH when caller cancellation overtakes approval', async () => {
       const ctx = await approvalSetup()
       const entered = Promise.withResolvers<undefined>()

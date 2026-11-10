@@ -168,6 +168,25 @@ describe('decide (deny > ask > allow, first match wins)', () => {
   })
 })
 
+describe('decide with a session grant', () => {
+  it('a grant frees a novel command without a prompt', () => {
+    expect(decide([], 'bash', { command: 'npm install' }, { granted: true })).toBe('allow')
+  })
+
+  it('a grant outranks an ask rule', () => {
+    expect(decide([rule('ask', 'bash', 'ls *')], 'bash', { command: 'ls -la' }, { granted: true })).toBe('allow')
+  })
+
+  it('a deny rule still outranks a grant', () => {
+    expect(decide([rule('deny', 'bash', 'rm *')], 'bash', { command: 'rm -rf x' }, { granted: true })).toBe('deny')
+  })
+
+  it('a filesystem call granted on its path is allow regardless of rules', () => {
+    expect(decide([rule('ask', 'write', '.env')], 'write', { file_path: '/repo/.env' }, { granted: true })).toBe('allow')
+    expect(decide([rule('deny', 'write', '.env')], 'write', { file_path: '/repo/.env' }, { granted: true })).toBe('deny')
+  })
+})
+
 describe('parseRules ordering', () => {
   it('emits deny, then ask, then allow (precedence order)', () => {
     const rules = parseRules({ allow: ['Bash(a)'], ask: ['Bash(b)'], deny: ['Bash(c)'] })

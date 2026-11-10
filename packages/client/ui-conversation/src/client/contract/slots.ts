@@ -630,13 +630,19 @@ export class PendingApproval {
     return this.wait.payload.callId
   }
 
+  /** Whether the asker can record a session grant ("Allow for session" exists exactly then), carried from the frame. */
+  get allowSession(): boolean {
+    return this.wait.payload.allowSession === true
+  }
+
   /**
    * Deliver the user's decision; a rejected carrier receipt throws. Panel
    * removal stays frame-driven: the broadcast `approval/resolved` settles the
    * wait and drops it from the pending list.
-   * @param outcome - the only two client-answerable outcomes.
+   * @param outcome - the client-answerable outcomes; `'allowed-for-session'` is
+   *   only valid on an ask whose `allowSession` is true.
    */
-  async answer(outcome: 'allowed-once' | 'rejected'): Promise<void> {
+  async answer(outcome: 'allowed-once' | 'allowed-for-session' | 'rejected'): Promise<void> {
     const receipt = await this.wait.respond({
       ok: true,
       value: { sessionId: this.wait.sessionId, approvalId: this.wait.payload.approvalId, outcome },

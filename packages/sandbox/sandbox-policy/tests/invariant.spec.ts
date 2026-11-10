@@ -25,6 +25,25 @@ describe('sandbox-policy invariants', () => {
     },
   )
 
+  it('accepts a durable grant with and without a root', async () => {
+    const ctx = await setup()
+    const grant = (root?: string): SessionEvent => ({
+      type: 'sandbox/grant', seq: 0, time: 0, data: { mode: 'workspace-write', ...root !== undefined ? { root } : {} },
+    })
+    expect(() => { ctx.emit('session/event', {} as Session, grant()) }).not.toThrow()
+    expect(() => { ctx.emit('session/event', {} as Session, grant('/repo/a.ts')) }).not.toThrow()
+  })
+
+  it('rejects an unknown grant mode or an empty root', async () => {
+    const ctx = await setup()
+    expect(() => { ctx.emit('session/event', {} as Session, {
+      type: 'sandbox/grant', seq: 0, time: 0, data: { mode: 'host-root' },
+    } as SessionEvent) }).toThrow(new InvariantError('@deepseek-ai/dsh-sandbox-policy', 'sandbox/grant carries unknown mode "host-root"'))
+    expect(() => { ctx.emit('session/event', {} as Session, {
+      type: 'sandbox/grant', seq: 0, time: 0, data: { mode: 'workspace-write', root: '' },
+    } as SessionEvent) }).toThrow(new InvariantError('@deepseek-ai/dsh-sandbox-policy', 'sandbox/grant root must be non-empty when present'))
+  })
+
   it('ignores unrelated event streams', async () => {
     const ctx = await setup()
     expect(() => { ctx.emit('session/event', {} as Session, {

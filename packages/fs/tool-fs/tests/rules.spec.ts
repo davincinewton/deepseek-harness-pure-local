@@ -69,6 +69,17 @@ function call(name: string, args: unknown, withAgent = true) {
   })
 }
 
+/** Execute against a stable agent so a recorded grant is visible to later calls. */
+function callWith(agent: ReturnType<typeof fakeAgent>, name: string, args: unknown) {
+  return ctx.tools.execute({
+    signal: new AbortController().signal,
+    callId: CallId(`rules-call-${++callCounter}`),
+    name,
+    arguments: args,
+    agent: agent as never,
+  })
+}
+
 function text(result: { content: { type: string; text?: string }[] }): string {
   return result.content.filter(b => b.type === 'text').map(b => b.text).join('')
 }
@@ -141,5 +152,47 @@ describe('fs permission rules', () => {
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(LocalFileSystem, { cwd: dir })
     await expect(ctx.plugin(ToolFs, { rules: { deny: ['Write(unclosed'] } })).rejects.toThrow(/invalid permission rule/)
+  })
+
+  it('"allow for session" records one grant covering that path and skips later prompts', async () => {
+    await setup(true, { ask: ['Write(*)'] })
+    const asked = vi.fn()
+    ctx.on('approval/request', (req) => {
+      expect(req.allowSession).toBe(true)
+      asked()
+      return Promise.resolve<ApprovalOutcome>('allowed-for-session')
+    })
+    const agent = fakeAgent()
+    expect((await callWith(agent, 'write', { file_path: 'gated.txt', content: 'v' })).isError).toBe(false)
+    const grants = agent.session.events.filter(event => event.type === 'sandbox/grant')
+    expect(grants).toHaveLength(1)
+    expect(grants[0]?.data).toEqual({ mode: 'danger-full-access', root: join(dir, 'gated.txt') })
+    // The granted path is free; a sibling path still prompts.
+    expect((await callWith(agent, 'write', { file_path: 'gated.txt', content: 'v2' })).isError).toBe(false)
+    expect(asked).toHaveBeenCalledTimes(1)
+    expect((await callWith(agent, 'write', { file_path: 'sibling.txt', content: 's' })).isError).toBe(false)
+    expect(asked).toHaveBeenCalledTimes(2)
+  })
+
+  it('a sandbox/mode switch revokes the fs grant', async () => {
+    await setup(true, { ask: ['Write(*)'] })
+    const asked = vi.fn()
+    ctx.on('approval/request', () => { asked(); return Promise.resolve<ApprovalOutcome>('rejected') })
+    const agent = fakeAgent()
+    agent.session.append('sandbox/grant', { mode: 'danger-full-access', root: join(dir, 'gated.txt') })
+    expect((await callWith(agent, 'write', { file_path: 'gated.txt', content: 'v' })).isError).toBe(false)
+    expect(asked).not.toHaveBeenCalled()
+    agent.session.append('sandbox/mode', { mode: 'workspace-write' })
+    expect((await callWith(agent, 'write', { file_path: 'gated.txt', content: 'v' })).isError).toBe(true)
+    expect(asked).toHaveBeenCalledTimes(1)
+  })
+
+  it('a deny rule blocks a path even when a grant covers it', async () => {
+    await setup(true, { deny: ['Write(gated.txt)'] })
+    const agent = fakeAgent()
+    agent.session.append('sandbox/grant', { mode: 'danger-full-access', root: join(dir, 'gated.txt') })
+    const result = await callWith(agent, 'write', { file_path: 'gated.txt', content: 'v' })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('denied by a permission rule')
   })
 })

@@ -24,8 +24,11 @@ export const inject = ['tools', 'fs', 'systemPrompt']
 
 /** Filesystem rule text grouped by effect; any group may be omitted. */
 interface FsRulesConfig {
+  /** Rule texts that let matching `write`/`edit` calls proceed without a prompt. */
   allow?: string[]
+  /** Rule texts that force a prompt for matching `write`/`edit` calls. */
   ask?: string[]
+  /** Rule texts that block matching `write`/`edit` calls under every mode. */
   deny?: string[]
 }
 

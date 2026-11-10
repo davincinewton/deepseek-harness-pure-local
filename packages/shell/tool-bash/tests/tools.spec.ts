@@ -765,7 +765,7 @@ describe('no-backend fallback (confining mode, no usable runner)', () => {
     const result = await call(ctx, 'bash', { command: 'ls', description: 'bg list', run_in_background: true }, agent)
     expect(result.isError).toBe(false)
     expect(start).toHaveBeenCalledTimes(1)
-    expect(start.mock.results[0]?.value.sandbox).toEqual({ mode: 'workspace-write', denied: false, enforcement: 'none' })
+    expect(start.mock.results[0]).toMatchObject({ value: { sandbox: { mode: 'workspace-write', denied: false, enforcement: 'none' } } })
   })
 
   it('prompts for a non-read-only command and runs it once approved', async () => {
@@ -825,6 +825,52 @@ describe('no-backend fallback (confining mode, no usable runner)', () => {
     await call(ctx, 'bash', { command: 'npm install', description: 'install' }, agent)
     // Normal confining path: the requested mode is passed through, not the fallback.
     expect(bash.modes).toEqual(['workspace-write'])
+  })
+
+  it('advertises allowSession and records one durable grant for "allowed-for-session"', async () => {
+    const { ctx } = await setupNoBackend(true)
+    const askSessions: boolean[] = []
+    ctx.on('approval/request', (req) => {
+      askSessions.push(req.allowSession === true)
+      return Promise.resolve<ApprovalOutcome>('allowed-for-session')
+    })
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    expect((await call(ctx, 'bash', { command: 'npm install', description: 'install' }, agent)).isError).toBe(false)
+    // The human's session grant is exactly one durable, log-only event.
+    const grants = agent.session.events.filter(event => event.type === 'sandbox/grant')
+    expect(grants).toHaveLength(1)
+    expect(grants[0]?.data).toEqual({ mode: 'workspace-write' })
+    // The next non-read-only command runs free instead of re-prompting.
+    expect((await call(ctx, 'bash', { command: 'rm -rf x', description: 'remove' }, agent)).isError).toBe(false)
+    expect(askSessions).toEqual([true])
+  })
+
+  it('a later sandbox/mode switch revokes the session grant', async () => {
+    const { ctx } = await setupNoBackend(true)
+    const asked = vi.fn()
+    ctx.on('approval/request', () => {
+      asked()
+      return Promise.resolve<ApprovalOutcome>('rejected')
+    })
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    agent.session.append('sandbox/grant', { mode: 'workspace-write' })
+    expect((await call(ctx, 'bash', { command: 'rm -rf x', description: 'remove' }, agent)).isError).toBe(false)
+    expect(asked).not.toHaveBeenCalled()
+    agent.session.append('sandbox/mode', { mode: 'workspace-write' })
+    expect((await call(ctx, 'bash', { command: 'rm -rf x', description: 'remove' }, agent)).isError).toBe(true)
+    expect(asked).toHaveBeenCalledTimes(1)
+  })
+
+  it('a deny rule still blocks a granted session', async () => {
+    const { ctx } = await setupNoBackend(true, { rules: { deny: ['Bash(curl *)'] } })
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    agent.session.append('sandbox/grant', { mode: 'workspace-write' })
+    const result = await call(ctx, 'bash', { command: 'curl http://x', description: 'fetch' }, agent)
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('denied by a permission rule')
   })
 })
 

@@ -18,6 +18,14 @@ function validateEvent(event: SessionEvent, fail: InvariantFailure): void {
   if (event.type === 'sandbox/mode' && !SANDBOX_MODES.includes(event.data.mode)) {
     fail(`sandbox/mode carries unknown mode ${JSON.stringify(event.data.mode)}`)
   }
+  if (event.type === 'sandbox/grant') {
+    if (!SANDBOX_MODES.includes(event.data.mode)) {
+      fail(`sandbox/grant carries unknown mode ${JSON.stringify(event.data.mode)}`)
+    }
+    if (event.data.root !== undefined && event.data.root.length === 0) {
+      fail('sandbox/grant root must be non-empty when present')
+    }
+  }
 }
 
 /** Install validation for loaded and newly appended sandbox modes. */

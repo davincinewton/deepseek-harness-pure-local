@@ -8,9 +8,11 @@
 // unbounded model text, so they scroll inside the card at the shared composer
 // cap (`data-approval-scroll`) and the action row stays outside it — the
 // buttons must be reachable no matter how long the command is.
-// One-shot: the buttons disable
+// One answer per request: the buttons disable
 // after a click and the panel leaves (the InputBar returns) on the broadcast
-// resolved frame.
+// resolved frame. A grantable ask (the fallback gate's bash/fs asks) adds
+// "Allow for session" beside "Allow once": the former records a durable grant
+// for this session instead of answering one call.
 
 import { useMemo, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -58,7 +60,7 @@ function ApprovalFlow({ pending, command, t }: {
   // lands; until then the buttons must not re-fire. An answer failure
   // (rejected receipt / transport) re-arms them for retry.
   const [answered, setAnswered] = useState(false)
-  const answer = (outcome: 'allowed-once' | 'rejected'): void => {
+  const answer = (outcome: 'allowed-once' | 'allowed-for-session' | 'rejected'): void => {
     setAnswered(true)
     void pending.answer(outcome).catch(() => { setAnswered(false) })
   }
@@ -77,6 +79,11 @@ function ApprovalFlow({ pending, command, t }: {
           <Button variant="outline" className={css.reject} disabled={answered} onClick={() => { answer('rejected') }}>
             {t('approval.reject')}
           </Button>
+          {pending.allowSession && (
+            <Button variant="outline" disabled={answered} onClick={() => { answer('allowed-for-session') }}>
+              {t('approval.allowSession')}
+            </Button>
+          )}
           <Button variant="primary" disabled={answered} onClick={() => { answer('allowed-once') }}>
             {t('approval.allowOnce')}
           </Button>

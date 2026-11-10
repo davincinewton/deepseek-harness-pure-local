@@ -387,6 +387,78 @@ Depends on: [`LocalConfig`](#deepseek-aidsh-bash-local)
 
 Source: [`packages/shell/bash-sandbox/src/index.ts:35`](../packages/shell/bash-sandbox/src/index.ts)
 
+<a id="deepseek-aidsh-browser"></a>
+
+## `@deepseek-ai/dsh-browser`
+
+```ts config-catalog
+/**
+ * Config for the browser seam. `provider` pins which provider wins; it is
+ * optional (a single registered usable provider auto-selects). Operational
+ * overrides such as environment variables must feed this same field rather than
+ * introduce a hidden priority chain.
+ */
+export interface BrowserRuntimeConfig {
+  /** Explicit provider id. Omitted = auto-select when exactly one usable. */
+  readonly provider?: string
+}
+```
+
+Source: [`packages/browser/browser/src/index.ts:62`](../packages/browser/browser/src/index.ts)
+
+<a id="deepseek-aidsh-browser-puppeteer"></a>
+
+## `@deepseek-ai/dsh-browser-puppeteer`
+
+Requires: `browser`
+
+```ts config-catalog
+/**
+ * Plugin config. `provision: 'auto'` (default) locates a cached Chrome Headless
+ * Shell or downloads it on first use; `'off'` requires `executablePath` or an
+ * already-cached build and fails loud otherwise. Navigation targets default to
+ * public http(s) addresses: loopback needs `allowLoopback`, and hosts whose DNS
+ * resolves to private/reserved addresses need `allowHosts`.
+ */
+export interface Config {
+  /** `auto` provisions Chrome Headless Shell on demand; `off` never downloads. Validated to exactly one of the two at load. */
+  provision?: string
+  /** Exact Chrome Headless Shell build id to use/install. Empty = newest cached / current stable. */
+  buildId?: string
+  /** Browser cache root. Empty = `~/.cache/puppeteer`. */
+  cacheDir?: string
+  /** Explicit Chrome Headless Shell executable. Empty = resolve from cache/provision. */
+  executablePath?: string
+  /** Chrome profile directory. Empty = an ephemeral per-process one, removed on dispose. */
+  userDataDir?: string
+  /** Extra Chrome launch arguments (e.g. `--no-sandbox` in containers without user namespaces). */
+  chromeArgs?: string[]
+  /** Navigation budget in milliseconds. */
+  navigationTimeoutMs?: number
+  /** Element wait / action budget in milliseconds. */
+  actionTimeoutMs?: number
+  /** Post-click wait for a follow-up navigation to settle. */
+  actionSettleMs?: number
+  /** Maximum accepted request URL length. */
+  maxUrlLength?: number
+  /** Hard bound on snapshot text returned by one page evaluation. */
+  maxEvaluateTextChars?: number
+  /** Allow loopback navigation targets. */
+  allowLoopback?: boolean
+  /** Hostnames allowed regardless of address class (exact, case-insensitive). */
+  allowHosts?: string[]
+  /**
+   * Echo provisioning and launch notices (installed / downloading /
+   * unusable / sandbox fallback) to stderr in addition to the session log,
+   * so `dsh web` and `dsh` terminals show the browser's state at boot.
+   * stderr keeps stdout protocol-clean for JSON-RPC hosts.
+   */
+  announce?: boolean
+}
+```
+
+Source: [`packages/browser/browser-puppeteer/src/index.ts:40`](../packages/browser/browser-puppeteer/src/index.ts)
+
 <a id="deepseek-aidsh-client-connection"></a>
 
 ## `@deepseek-ai/dsh-client-connection`
@@ -1518,7 +1590,7 @@ export interface Config {
 
 Depends on: [`SandboxMode`](subsystems/sandbox.md)
 
-Source: [`packages/sandbox/sandbox-policy/src/index.ts:67`](../packages/sandbox/sandbox-policy/src/index.ts)
+Source: [`packages/sandbox/sandbox-policy/src/index.ts:69`](../packages/sandbox/sandbox-policy/src/index.ts)
 
 <a id="deepseek-aidsh-sdk-jsonrpc-server"></a>
 
@@ -2366,10 +2438,22 @@ Requires: `tools` · `shell` · `systemPrompt` · `shellEnv`
 export interface Config {
   /** Expose `run_in_background` (default true); disabled calls are also rejected. */
   enableRunInBackground?: boolean
+  /** Declarative `Tool(specifier)` rules for this tool (deny > ask > allow; default none). */
+  rules?: BashRulesConfig
+}
+
+/** Bash rule text grouped by effect; any group may be omitted. */
+interface BashRulesConfig {
+  /** Rule texts that let matching commands proceed without a prompt. */
+  allow?: string[]
+  /** Rule texts that force a prompt for matching commands. */
+  ask?: string[]
+  /** Rule texts that block matching commands under every mode. */
+  deny?: string[]
 }
 ```
 
-Source: [`packages/shell/tool-bash/src/index.ts:34`](../packages/shell/tool-bash/src/index.ts)
+Source: [`packages/shell/tool-bash/src/index.ts:44`](../packages/shell/tool-bash/src/index.ts)
 
 <a id="deepseek-aidsh-tool-bash-persistent"></a>
 
@@ -2393,6 +2477,48 @@ export interface Config {
 
 Source: [`packages/shell/tool-bash-persistent/src/index.ts:400`](../packages/shell/tool-bash-persistent/src/index.ts)
 
+<a id="deepseek-aidsh-tool-browser"></a>
+
+## `@deepseek-ai/dsh-tool-browser`
+
+Requires: `tools` · `browser` · `systemPrompt`
+
+```ts config-catalog
+/** Plugin config: which browser tools to register, the act approval gate, budgets, and model budgets. */
+export interface Config {
+  /** Register `browser_navigate`. Defaults to true. */
+  navigate?: boolean
+  /** Register `browser_snapshot`. Defaults to true. */
+  snapshot?: boolean
+  /** Register `browser_act`. Defaults to true. */
+  act?: boolean
+  /** Register `browser_extract`. Defaults to true. */
+  extract?: boolean
+  /** Register `browser_screenshot` (requires a mounted attachments store). Defaults to true. */
+  screenshot?: boolean
+  /** Register `browser_close`. Defaults to true. */
+  close?: boolean
+  /** Ask the approval seam before every `browser_act`. Defaults to true. */
+  actRequiresApproval?: boolean
+  /** Cooperative timeout budget (ms) for `browser_navigate`. Defaults to 60000. */
+  navigateTimeoutMs?: number
+  /** Cooperative timeout budget (ms) for `browser_act`. Defaults to 20000. */
+  actTimeoutMs?: number
+  /** Cooperative timeout budget (ms) for `browser_snapshot`/`browser_extract`/`browser_close`. Defaults to 20000. */
+  readTimeoutMs?: number
+  /** Cooperative timeout budget (ms) for `browser_screenshot`. Defaults to 30000. */
+  screenshotTimeoutMs?: number
+  /** Cap on snapshot visible text. Defaults to 20000. */
+  snapshotMaxTextChars?: number
+  /** Cap on snapshot interactive elements. Defaults to 120. */
+  snapshotMaxElements?: number
+  /** Default and hard cap on `browser_extract` characters. Defaults to 100000. */
+  extractMaxChars?: number
+}
+```
+
+Source: [`packages/browser/tool-browser/src/index.ts:54`](../packages/browser/tool-browser/src/index.ts)
+
 <a id="deepseek-aidsh-tool-fs"></a>
 
 ## `@deepseek-ai/dsh-tool-fs`
@@ -2410,10 +2536,22 @@ export interface Config {
   readMaxBytes?: number
   /** Files at or above this size stream instead of loading whole into memory. */
   readStreamMinSize?: number
+  /** Declarative `Tool(specifier)` rules gating `write`/`edit` (deny → ask overlay; default none). */
+  rules?: FsRulesConfig
+}
+
+/** Filesystem rule text grouped by effect; any group may be omitted. */
+interface FsRulesConfig {
+  /** Rule texts that let matching `write`/`edit` calls proceed without a prompt. */
+  allow?: string[]
+  /** Rule texts that force a prompt for matching `write`/`edit` calls. */
+  ask?: string[]
+  /** Rule texts that block matching `write`/`edit` calls under every mode. */
+  deny?: string[]
 }
 ```
 
-Source: [`packages/fs/tool-fs/src/index.ts:25`](../packages/fs/tool-fs/src/index.ts)
+Source: [`packages/fs/tool-fs/src/index.ts:36`](../packages/fs/tool-fs/src/index.ts)
 
 <a id="deepseek-aidsh-tool-fs-search"></a>
 
@@ -2844,9 +2982,17 @@ export interface Config {
    * The deployment's default {@link ApprovalPolicy} for sessions without an
    * `approval/policy` override — `'ask'` delegates to the composed answerers
    * (fail-closed with none); `'never'` auto-rejects every ask without
-   * prompting (the deterministic CI/unattended stance).
+   * prompting (the deterministic CI/unattended stance); `'auto'` resolves
+   * every ask without prompting through the rule-gated stance.
    */
   readonly policy?: ApprovalPolicy
+  /**
+   * Forbid the `'auto'` policy for this deployment: selecting it on a live
+   * session throws, the policy context states it is disabled, and any ask a
+   * session already carrying `auto` resolves `'rejected'`. A managed
+   * deployment sets this to keep unattended rule-gated execution opt-in.
+   */
+  readonly disableAutoMode?: boolean
 }
 
 /**
@@ -2858,11 +3004,16 @@ export interface Config {
  * - `'never'` — never prompt anyone: every ask resolves `'rejected'`
  *   deterministically. The strict headless stance (CI, unattended runs) and
  *   the policy whose outcome is knowable without asking.
+ * - `'auto'` — the rule-gated stance: asks never reach a human. The owning
+ *   tools already resolved everything the rules allow (read-only and
+ *   allow-listed calls run free), so a surviving ask is outside the heuristic
+ *   and resolves `'rejected'` deterministically. A deployment can forbid the
+ *   policy with {@link Config.disableAutoMode}.
  */
-export type ApprovalPolicy = 'ask' | 'never'
+export type ApprovalPolicy = 'ask' | 'never' | 'auto'
 ```
 
-Source: [`packages/interaction/user-approval/src/index.ts:177`](../packages/interaction/user-approval/src/index.ts)
+Source: [`packages/interaction/user-approval/src/index.ts:193`](../packages/interaction/user-approval/src/index.ts)
 
 <a id="deepseek-aidsh-web"></a>
 

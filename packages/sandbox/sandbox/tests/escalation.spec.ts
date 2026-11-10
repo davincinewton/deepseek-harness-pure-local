@@ -105,6 +105,14 @@ describe('approveEscalation', () => {
       .rejects.toThrow('no approval channel is available')
   })
 
+  it('an approver that answers "allowed-for-session" cannot record a grant for an escalation', async () => {
+    // The approval service never advertises allowSession on this ask, so a
+    // conforming answerer cannot produce this outcome — a non-conforming one
+    // must not silently turn an escalation into a durable grant either.
+    await expect(approveEscalation(req(), ingredients({ approver: approver('allowed-for-session') })))
+      .rejects.toThrow('sandbox escalation to "workspace-write" cannot record a session grant; allow once instead')
+  })
+
   it('an outcome outside the closed union trips the exhaustiveness guard (defensive)', async () => {
     await expect(approveEscalation(req(), ingredients({ approver: approver('bogus' as never) }))).rejects.toThrow()
   })
