@@ -32,6 +32,13 @@ export async function mockServer(script: {
   body?: string
   delayMs?: number
   headers?: Record<string, string>
+  /**
+   * `keepAliveCount` SSE comment lines (`: keep-alive`) written one per
+   * `keepAliveMs` before the first data event: transport bytes with no stream
+   * value, as local servers emit during prompt processing.
+   */
+  keepAliveMs?: number
+  keepAliveCount?: number
 }[]): Promise<MockServer> {
   const paths: string[] = []
   const requests: unknown[] = []
@@ -57,7 +64,14 @@ export async function mockServer(script: {
       }
       response.writeHead(200, { 'content-type': 'text/event-stream' })
       let index = 0
+      let keepAlivesLeft = behavior.keepAliveCount ?? 0
       const writeNext = (): void => {
+        if (keepAlivesLeft > 0 && behavior.keepAliveMs !== undefined) {
+          keepAlivesLeft -= 1
+          response.write(': keep-alive\n\n')
+          setTimeout(writeNext, behavior.keepAliveMs)
+          return
+        }
         const event = behavior.events?.[index++]
         if (event === undefined) { response.end(); return }
         response.write(`data: ${event}\n\n`)

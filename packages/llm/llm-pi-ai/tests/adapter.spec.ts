@@ -350,6 +350,21 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/chat/completions'])
     expect(server.closedResponses).toBe(1)
   })
+
+  it('rearms the idle watchdog on SSE keep-alive comments during a prefill gap', async () => {
+    // Ten comment lines, one per 20ms, precede the first data event: each
+    // 20ms gap is inside the 50ms idle bound, but the 200ms total silent
+    // window is not — only the comment bytes keep the request alive, exactly
+    // as a local server's keep-alives do during prompt processing.
+    const server = await mockServer([{ events: textEvents, keepAliveMs: 20, keepAliveCount: 10 }])
+    const ctx = await harness(server.url, { streamIdleTimeoutMs: 50 })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+    expect(server.paths).toEqual(['/chat/completions'])
+  })
 })
 
 describe('provider profile lifecycle', () => {

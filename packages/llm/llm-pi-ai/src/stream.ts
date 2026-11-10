@@ -101,6 +101,15 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
       return { kind: 'stop' }
     case 'length': return { kind: 'max-tokens' }
     case 'toolUse': return { kind: 'tool-calls' }
+    // pi-ai's placeholder before a terminal reason arrives. A terminal
+    // `done`/`error` event carrying it means the provider closed the stream
+    // without ever naming a finish reason — a truncated response, matching the
+    // classification for the providers' own "stream ended before the terminal
+    // event" throws.
+    case 'pending': return {
+      kind: 'error',
+      failure: { message: 'pi-ai stream ended without a terminal stop reason', code: 'TRANSPORT' },
+    }
     case 'aborted': return {
       kind: 'aborted',
       failure: { message: message.errorMessage ?? 'pi-ai stream aborted', code: 'ABORTED' },

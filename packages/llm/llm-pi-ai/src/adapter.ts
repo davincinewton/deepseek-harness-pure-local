@@ -52,6 +52,7 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { toPiContext } from './context.ts'
 import { toStreamChunks } from './stream.ts'
+import { pulsingFetch } from './transport.ts'
 
 /** One resolution's frozen view: the profiles and the collection built from them. */
 interface PiAiSnapshot {
@@ -324,6 +325,11 @@ export class PiAiAdapter extends LlmAdapter {
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
         signal: watchdog.signal,
+        // Raw bytes, not just stream values, prove the provider is alive: the
+        // SDK SSE parsers discard `: keep-alive` comments that local servers
+        // send for minutes during a long prefill, so each received chunk
+        // rearms the idle watchdog below the parser.
+        fetch: pulsingFetch(globalThis.fetch, () => { watchdog.pulse() }),
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
         headers: requestHeaders(profile.headers),
