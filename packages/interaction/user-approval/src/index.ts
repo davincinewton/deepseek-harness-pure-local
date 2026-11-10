@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { assertNever, createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
 import { scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
@@ -79,7 +79,7 @@ export { ApprovalRequestId } from './types.ts'
 export type { ApprovalOutcome } from './types.ts'
 
 /** Every {@link ApprovalOutcome}, for runtime normalization of answerer returns. */
-const OUTCOMES: readonly ApprovalOutcome[] = ['allowed-once', 'allowed-for-session', 'rejected', 'cancelled', 'unavailable']
+const OUTCOMES: readonly ApprovalOutcome[] = ['allowed-once', 'rejected', 'cancelled', 'unavailable']
 
 /**
  * A session's approval policy — what happens to an {@link ApprovalService}
@@ -90,23 +90,14 @@ const OUTCOMES: readonly ApprovalOutcome[] = ['allowed-once', 'allowed-for-sessi
  * - `'never'` — never prompt anyone: every ask resolves `'rejected'`
  *   deterministically. The strict headless stance (CI, unattended runs) and
  *   the policy whose outcome is knowable without asking.
- * - `'auto'` — the rule-gated stance: asks never reach a human. The owning
- *   tools already resolved everything the rules allow (read-only and
- *   allow-listed calls run free), so a surviving ask is outside the heuristic
- *   and resolves `'rejected'` deterministically. A deployment can forbid the
- *   policy with {@link Config.disableAutoMode}.
  */
-export type ApprovalPolicy = 'ask' | 'never' | 'auto'
+export type ApprovalPolicy = 'ask' | 'never'
 
 /** Every {@link ApprovalPolicy}, for option advertisement and runtime validation of untrusted policy strings. */
-export const APPROVAL_POLICIES: readonly ApprovalPolicy[] = ['ask', 'never', 'auto']
+export const APPROVAL_POLICIES: readonly ApprovalPolicy[] = ['ask', 'never']
 
 /** Model-facing statement for the deterministic `'never'` policy. */
 const NEVER_SENTENCE = 'Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`).'
-/** Model-facing statement for the rule-gated `'auto'` policy. */
-const AUTO_SENTENCE = 'Approval policy: auto. Actions that require approval are decided by the permission rules without prompting: read-only and allow-listed operations proceed, everything else is rejected. Do not attempt to escalate — no prompt will happen.'
-/** Model-facing statement for a disabled `'auto'` policy: the same automatic refusal, stated as a deployment restriction. */
-const AUTO_DISABLED_SENTENCE = 'Approval policy: auto is disabled in this deployment; every action that requires approval is rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`).'
 /** Model-facing statement for an interactive policy that may still fail closed. */
 const ASK_SENTENCE = 'Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed.'
 
@@ -150,7 +141,7 @@ function hasOpenTurn(events: readonly SessionEvent[]): boolean {
  */
 export function setApprovalPolicy(session: Session, policy: ApprovalPolicy): void {
   if (!APPROVAL_POLICIES.includes(policy)) {
-    throw new TypeError('approval policy must be one of "ask", "never" or "auto"')
+    throw new TypeError('approval policy must be one of "ask" or "never"')
   }
   session.append('approval/policy', { policy })
 }
@@ -180,13 +171,6 @@ export interface ApprovalRequest {
    * immediately and a late answer from a still-pending answerer is discarded.
    */
   readonly signal?: AbortSignal
-  /**
-   * The asker can honor a session-scoped grant for this decision: an answerer
-   * may answer `'allowed-for-session'` instead of `'allowed-once'`, and the
-   * asker records the grant. Unadvertised asks normalize that outcome to
-   * `'unavailable'` (a grant with no owner is a fail-closed answer).
-   */
-  readonly allowSession?: boolean
 }
 
 /** Plugin config. All optional — `static Config` supplies the defaults. */
@@ -195,17 +179,9 @@ export interface Config {
    * The deployment's default {@link ApprovalPolicy} for sessions without an
    * `approval/policy` override — `'ask'` delegates to the composed answerers
    * (fail-closed with none); `'never'` auto-rejects every ask without
-   * prompting (the deterministic CI/unattended stance); `'auto'` resolves
-   * every ask without prompting through the rule-gated stance.
+   * prompting (the deterministic CI/unattended stance).
    */
   readonly policy?: ApprovalPolicy
-  /**
-   * Forbid the `'auto'` policy for this deployment: selecting it on a live
-   * session throws, the policy context states it is disabled, and any ask a
-   * session already carrying `auto` resolves `'rejected'`. A managed
-   * deployment sets this to keep unattended rule-gated execution opt-in.
-   */
-  readonly disableAutoMode?: boolean
 }
 
 /**
@@ -215,17 +191,13 @@ export interface Config {
  */
 export class ApprovalService extends Service {
   static Config: z<Config> = z.object({
-    policy: z.union(APPROVAL_POLICIES as ApprovalPolicy[]).default('ask'),
-    disableAutoMode: z.boolean().default(false),
+    policy: z.union(['ask', 'never'] as const).default('ask'),
   })
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'approval')
-    if (this.config.disableAutoMode && this.config.policy === 'auto') {
-      throw new Error('user-approval: the configured default policy is "auto" while disableAutoMode forbids it')
-    }
 
-    const effective = (agent: Agent): ApprovalPolicy => this.policyOf(agent.session)
+    const effective = (agent: Agent): ApprovalPolicy => this.effectivePolicy(agent.session)
 
     // The complete current value travels after retained history, so switching
     // policy does not rewrite the stable system-prompt cache prefix.
@@ -238,23 +210,10 @@ export class ApprovalService extends Service {
           // A bare assemble() (tests, diagnostics) has no session to state.
           if (agent === undefined) return ''
           const policy = effective(agent)
-          switch (policy) {
-            case 'never': return NEVER_SENTENCE
-            case 'auto': return this.config.disableAutoMode ? AUTO_DISABLED_SENTENCE : AUTO_SENTENCE
-            case 'ask': return ASK_SENTENCE
-            default: return assertNever(policy, 'ApprovalPolicy')
-          }
+          return policy === 'never' ? NEVER_SENTENCE : ASK_SENTENCE
         },
       })
     })
-  }
-
-  /**
-   * Whether this deployment forbids the `'auto'` policy.
-   * @returns true when `disableAutoMode` is configured.
-   */
-  get autoModeDisabled(): boolean {
-    return this.config.disableAutoMode === true
   }
 
   /**
@@ -263,13 +222,9 @@ export class ApprovalService extends Service {
    * because there is no previously visible policy to change.
    * @param agent - the live agent whose policy is changing.
    * @param policy - the new effective policy.
-   * @throws when the policy is `'auto'` and this deployment forbids it.
    */
   setPolicy(agent: Agent, policy: ApprovalPolicy): void {
-    if (policy === 'auto' && this.config.disableAutoMode) {
-      throw new Error('user-approval: "auto" is disabled in this deployment (disableAutoMode)')
-    }
-    const previous = this.policyOf(agent.session)
+    const previous = this.effectivePolicy(agent.session)
     if (previous === policy) return
     setApprovalPolicy(agent.session, policy)
     agent.inject(createUserMessage({
@@ -295,9 +250,7 @@ export class ApprovalService extends Service {
    * authoritative append cannot reject the request or suppress its matching
    * audit event.
    * @param req - the pending decision (agent, tool identity, reason, signal).
-   * @returns the closed outcome; `'allowed-once'` is a one-shot grant and
-   *   `'allowed-for-session'` a grant the asker records (only when it
-   *   advertised {@link ApprovalRequest.allowSession}).
+   * @returns the closed outcome; `'allowed-once'` is the only grant.
    * @throws when no turn is open or either audit event fails before the session
    *   append commit point.
    */
@@ -329,7 +282,7 @@ export class ApprovalService extends Service {
    * @param session - the exact accepted session whose policy applies.
    * @returns the policy every ask for this session resolves under right now.
    */
-  policyOf(session: Session): ApprovalPolicy {
+  private effectivePolicy(session: Session): ApprovalPolicy {
     return this.overrideOf(session) ?? this.config.policy ?? 'ask'
   }
 
@@ -351,21 +304,12 @@ export class ApprovalService extends Service {
   private async decide(req: ApprovalRequest, session: Session): Promise<ApprovalOutcome> {
     const signal = req.signal
     if (signal?.aborted) return 'cancelled'
-    // The deterministic policies are decided HERE, before any dispatch: a
-    // listener registered with `prepend: true` after this service mounts would
-    // sit ahead of any gate LISTENER, so a listener-shaped gate cannot keep
-    // the documented promise that 'never' (and a forbidden 'auto') rejects
-    // regardless of registration order — only the service's own request path
-    // can. 'auto' is deterministic for the same reason: the owning tools have
-    // already resolved everything the rules allow, so a surviving ask is
-    // outside the heuristic and fails closed without a prompt.
-    const policy = this.policyOf(session)
-    switch (policy) {
-      case 'never': return 'rejected'
-      case 'auto': return 'rejected'
-      case 'ask': break
-      default: return assertNever(policy, 'ApprovalPolicy')
-    }
+    // The 'never' policy is decided HERE, before any dispatch: a listener
+    // registered with `prepend: true` after this service mounts would sit
+    // ahead of any gate LISTENER, so a listener-shaped gate cannot keep the
+    // documented promise that 'never' rejects deterministically regardless
+    // of registration order — only the service's own request path can.
+    if (this.effectivePolicy(session) === 'never') return 'rejected'
     // Enter the promise chain BEFORE dispatching: a listener that throws
     // SYNCHRONOUSLY (before its first await) must land in the same rejection
     // path as an async one — `Promise.resolve(call())` would let it escape
@@ -377,15 +321,11 @@ export class ApprovalService extends Service {
       ),
     ).then(
       // Normalize a rogue (non-vocabulary) answerer return to the fail-closed
-      // outcome instead of leaking it into callers' closed-union switches. A
-      // session grant with no owner on the ask is the same fail-closed case:
-      // the asker advertised nothing to record.
+      // outcome instead of leaking it into callers' closed-union switches.
       outcome => OUTCOMES.includes(outcome) ? outcome : 'unavailable',
       // A throwing answerer must fail the QUESTION closed, not the caller's
       // tool call open — the seam contains its callbacks.
-      (): ApprovalOutcome => 'unavailable',
-    ).then(
-      outcome => outcome === 'allowed-for-session' && req.allowSession !== true ? 'unavailable' : outcome,
+      () => 'unavailable',
     )
     if (signal === undefined) return answer
     return await new Promise<ApprovalOutcome>((resolve) => {

@@ -12,10 +12,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { PermissionRule, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, escalationHintMarker, matchFsRule, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, approveEscalation, escalationHintMarker, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
-import { effectiveGrants, grantCovers, grantSandbox } from '@deepseek-ai/dsh-sandbox-policy'
 import { FsError } from '@deepseek-ai/dsh-fs'
 
 /** The two escalation arguments a mutating tool may carry (advertised only under a confining backend). */
@@ -40,66 +39,13 @@ export class FsSandboxController {
   readonly escalationModes: readonly SandboxMode[]
   /** Shared per-session policy resolver, required by a confining backend. */
   private readonly policy: SandboxPolicyService | undefined
-  /** Parsed `Tool(specifier)` rules gating mutations (deny → ask overlay; default none). */
-  private readonly rules: readonly PermissionRule[]
 
-  constructor(private readonly ctx: Context, rules: readonly PermissionRule[] = []) {
-    this.rules = rules
+  constructor(private readonly ctx: Context) {
     const defaultMode = ctx.fs.sandboxMode
     this.escalationModes = defaultMode === undefined ? [] : ESCALATION_TARGETS
     this.policy = defaultMode === undefined ? undefined : ctx.get('sandboxPolicy')
     if (defaultMode !== undefined && this.policy === undefined) {
       throw new Error('tool-fs: the mounted filesystem confines but ctx.sandboxPolicy is missing')
-    }
-  }
-
-  /**
-   * Overlay-gate one mutation against the configured path rules, called after
-   * the target resolves (rules match the backend's canonical key). A deny rule
-   * blocks the call; an ask rule prompts through `ctx.approval` (fail-closed
-   * without a channel), unless the session already holds a grant covering this
-   * path. No rule and no match keep the standing behavior: the fs fence and the
-   * escalation flow decide the mutation.
-   * @param toolName - the mutating tool's name (`write` / `edit`), the rule subject.
-   * @param path - the resolved target path to match rules against.
-   * @param exec - the tool-execution context (agent, callId, signal).
-   */
-  async gate(toolName: string, path: string, exec: ToolExecution): Promise<void> {
-    const scoped = this.rules.filter(rule => rule.tool.toLowerCase() === toolName.toLowerCase())
-    if (scoped.some(rule => rule.effect === 'deny' && matchFsRule(rule, path))) {
-      throw new Error(`this file operation is denied by a permission rule: ${path}`)
-    }
-    if (!scoped.some(rule => rule.effect === 'ask' && matchFsRule(rule, path))) return
-    const session = exec.agent?.session
-    // The mode a grant is recorded under: the session's resolved policy mode
-    // when a policy home is mounted; an unconfined filesystem enforces nothing,
-    // which is exactly the dangerous mode's semantics.
-    const mode: SandboxMode = session === undefined
-      ? 'danger-full-access'
-      : this.policy?.resolve({ session }).mode ?? 'danger-full-access'
-    // A human's "allow for session" covers this path under the same mode; the
-    // grant is durable and survives until the next sandbox/mode switch.
-    if (session !== undefined && grantCovers(effectiveGrants(session.events), mode, path)) return
-    const approval = this.ctx.get('approval')
-    if (approval === undefined || exec.agent === undefined) {
-      throw new Error(`this file operation is gated by an ask rule: ${path}, but no approval channel is available`)
-    }
-    const outcome = await approval.request({
-      agent: exec.agent,
-      toolName,
-      callId: exec.callId,
-      reason: `a permission rule requires approval to modify: ${path}`,
-      signal: exec.signal,
-      // The human may allow this path for the rest of the session once, which
-      // records a grant instead of re-prompting per call.
-      allowSession: true,
-    })
-    if (outcome === 'allowed-for-session') {
-      grantSandbox(exec.agent.session, { mode, root: path })
-      return
-    }
-    if (outcome !== 'allowed-once') {
-      throw new Error(`this file operation was not approved (outcome: ${outcome}): ${path}`)
     }
   }
 

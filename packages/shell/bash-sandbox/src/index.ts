@@ -76,11 +76,6 @@ export class SandboxBashExecutor extends LocalBashExecutor {
     return this.mode
   }
 
-  /** The provider's real backend verdict — the tool layer queries it for the no-backend fallback. */
-  override backendAvailable(): boolean {
-    return this.ctx.sandbox.backendAvailable()
-  }
-
   /**
    * Stamp a complete per-call policy onto the spec. Tool calls supply the
    * calling session's resolved mode and root; lower-level callers fall back to

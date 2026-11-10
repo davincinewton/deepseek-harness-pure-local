@@ -80,7 +80,7 @@ async function waitForCount(mux: { frames: MuxFrame[] }, type: MuxFrame['type'],
   expect(mux.frames.filter(frame => frame.type === type).length).toBeGreaterThanOrEqual(count)
 }
 
-function answer(rpcId: RpcId, sessionId: unknown, approvalId: ApprovalRequestId, outcome: 'allowed-once' | 'allowed-for-session' | 'rejected'): Parameters<ApiProxy['respond']>[0] {
+function answer(rpcId: RpcId, sessionId: unknown, approvalId: ApprovalRequestId, outcome: 'allowed-once' | 'rejected'): Parameters<ApiProxy['respond']>[0] {
   return { type: 'client-response', rpcId, result: { ok: true, value: { sessionId, approvalId, outcome } } }
 }
 
@@ -106,35 +106,6 @@ describe('approval pending registry', () => {
     // The question settled: a duplicate answer is late, not re-decidable.
     const dup = await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'rejected'))
     expect(dup).toEqual({ accepted: false, reason: 'not-pending' })
-    abort.abort()
-  })
-
-  it('threads allowSession and refuses a session grant on an ask that cannot record one', async () => {
-    const { ctx, api } = await harness()
-    const abort = new AbortController()
-    const mux = openMux(api, abort)
-    const agent = agentOf(ctx)
-    const grantable = ctx.approval.request({ agent, toolName: 'bash', allowSession: true })
-    const requested = requestedOf(await mux.waitFor('approval/requested'))
-    expect(requested.allowSession).toBe(true)
-    const envelope = mux.envelopes.find(e => e.payload.type === 'approval/requested') as RpcRequest<MuxFrame>
-    expect(await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'allowed-for-session')))
-      .toEqual({ accepted: true })
-    await expect(grantable).resolves.toBe('allowed-for-session')
-    expect(await mux.waitFor('approval/resolved')).toMatchObject({ outcome: 'allowed-for-session' })
-
-    // An ask that advertised nothing cannot be answered with a session grant.
-    const plain = ctx.approval.request({ agent, toolName: 'write' })
-    await waitForCount(mux, 'approval/requested', 2)
-    const second = mux.frames.filter(frame => frame.type === 'approval/requested')[1] as Extract<MuxFrame, { type: 'approval/requested' }>
-    const secondEnvelope = mux.envelopes.filter(e => e.payload.type === 'approval/requested')[1] as RpcRequest<MuxFrame>
-    expect(second.allowSession).toBeUndefined()
-    expect(await api.respond(answer(secondEnvelope.rpcId, second.sessionId, second.approvalId, 'allowed-for-session')))
-      .toEqual({ accepted: false, reason: 'bad-response' })
-    // The rejected grant left the question pending: a valid answer still lands.
-    expect(await api.respond(answer(secondEnvelope.rpcId, second.sessionId, second.approvalId, 'allowed-once')))
-      .toEqual({ accepted: true })
-    await expect(plain).resolves.toBe('allowed-once')
     abort.abort()
   })
 

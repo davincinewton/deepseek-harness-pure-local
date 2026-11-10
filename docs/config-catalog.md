@@ -404,7 +404,7 @@ export interface BrowserRuntimeConfig {
 }
 ```
 
-Source: [`packages/browser/browser/src/index.ts:62`](../packages/browser/browser/src/index.ts)
+Source: [`packages/browser/browser/src/index.ts:72`](../packages/browser/browser/src/index.ts)
 
 <a id="deepseek-aidsh-browser-puppeteer"></a>
 
@@ -433,6 +433,18 @@ export interface Config {
   userDataDir?: string
   /** Extra Chrome launch arguments (e.g. `--no-sandbox` in containers without user namespaces). */
   chromeArgs?: string[]
+  /**
+   * Page user-agent to present. The default is a plain desktop Chrome agent
+   * because search engines and most news sites bot-filter the headless
+   * shell's own `HeadlessChrome` UA (measured: Google answers the SERP with a
+   * 429 `/sorry` wall, Bing serves a results-less shell, DuckDuckGo 403s).
+   * Set the empty string to present the browser's native headless UA.
+   */
+  userAgent?: string
+  /** Page viewport width in CSS pixels. */
+  viewportWidth?: number
+  /** Page viewport height in CSS pixels. */
+  viewportHeight?: number
   /** Navigation budget in milliseconds. */
   navigationTimeoutMs?: number
   /** Element wait / action budget in milliseconds. */
@@ -1590,7 +1602,7 @@ export interface Config {
 
 Depends on: [`SandboxMode`](subsystems/sandbox.md)
 
-Source: [`packages/sandbox/sandbox-policy/src/index.ts:69`](../packages/sandbox/sandbox-policy/src/index.ts)
+Source: [`packages/sandbox/sandbox-policy/src/index.ts:67`](../packages/sandbox/sandbox-policy/src/index.ts)
 
 <a id="deepseek-aidsh-sdk-jsonrpc-server"></a>
 
@@ -2438,22 +2450,10 @@ Requires: `tools` · `shell` · `systemPrompt` · `shellEnv`
 export interface Config {
   /** Expose `run_in_background` (default true); disabled calls are also rejected. */
   enableRunInBackground?: boolean
-  /** Declarative `Tool(specifier)` rules for this tool (deny > ask > allow; default none). */
-  rules?: BashRulesConfig
-}
-
-/** Bash rule text grouped by effect; any group may be omitted. */
-interface BashRulesConfig {
-  /** Rule texts that let matching commands proceed without a prompt. */
-  allow?: string[]
-  /** Rule texts that force a prompt for matching commands. */
-  ask?: string[]
-  /** Rule texts that block matching commands under every mode. */
-  deny?: string[]
 }
 ```
 
-Source: [`packages/shell/tool-bash/src/index.ts:44`](../packages/shell/tool-bash/src/index.ts)
+Source: [`packages/shell/tool-bash/src/index.ts:34`](../packages/shell/tool-bash/src/index.ts)
 
 <a id="deepseek-aidsh-tool-bash-persistent"></a>
 
@@ -2494,6 +2494,10 @@ export interface Config {
   act?: boolean
   /** Register `browser_extract`. Defaults to true. */
   extract?: boolean
+  /** Register `browser_extract_list`. Defaults to true. */
+  extractList?: boolean
+  /** Register `browser_wait`. Defaults to true. */
+  wait?: boolean
   /** Register `browser_screenshot` (requires a mounted attachments store). Defaults to true. */
   screenshot?: boolean
   /** Register `browser_close`. Defaults to true. */
@@ -2514,10 +2518,22 @@ export interface Config {
   snapshotMaxElements?: number
   /** Default and hard cap on `browser_extract` characters. Defaults to 100000. */
   extractMaxChars?: number
+  /** Default row cap for `browser_extract_list`. Defaults to 8. */
+  extractListDefaultLimit?: number
+  /** Hard row cap for `browser_extract_list`. Defaults to 50. */
+  extractListMaxLimit?: number
+  /** Default per-field character cap for `browser_extract_list`. Defaults to 200. */
+  extractListFieldChars?: number
+  /** Hard per-field character cap for `browser_extract_list`. Defaults to 2000. */
+  extractListMaxFieldChars?: number
+  /** Provider-side wait budget for `browser_wait` (ms). Defaults to 20000. */
+  waitTimeoutMs?: number
+  /** Cooperative tool budget for `browser_wait` (ms); must exceed `waitTimeoutMs`. Defaults to 25000. */
+  waitToolTimeoutMs?: number
 }
 ```
 
-Source: [`packages/browser/tool-browser/src/index.ts:54`](../packages/browser/tool-browser/src/index.ts)
+Source: [`packages/browser/tool-browser/src/index.ts:58`](../packages/browser/tool-browser/src/index.ts)
 
 <a id="deepseek-aidsh-tool-fs"></a>
 
@@ -2536,22 +2552,10 @@ export interface Config {
   readMaxBytes?: number
   /** Files at or above this size stream instead of loading whole into memory. */
   readStreamMinSize?: number
-  /** Declarative `Tool(specifier)` rules gating `write`/`edit` (deny → ask overlay; default none). */
-  rules?: FsRulesConfig
-}
-
-/** Filesystem rule text grouped by effect; any group may be omitted. */
-interface FsRulesConfig {
-  /** Rule texts that let matching `write`/`edit` calls proceed without a prompt. */
-  allow?: string[]
-  /** Rule texts that force a prompt for matching `write`/`edit` calls. */
-  ask?: string[]
-  /** Rule texts that block matching `write`/`edit` calls under every mode. */
-  deny?: string[]
 }
 ```
 
-Source: [`packages/fs/tool-fs/src/index.ts:36`](../packages/fs/tool-fs/src/index.ts)
+Source: [`packages/fs/tool-fs/src/index.ts:25`](../packages/fs/tool-fs/src/index.ts)
 
 <a id="deepseek-aidsh-tool-fs-search"></a>
 
@@ -2982,17 +2986,9 @@ export interface Config {
    * The deployment's default {@link ApprovalPolicy} for sessions without an
    * `approval/policy` override — `'ask'` delegates to the composed answerers
    * (fail-closed with none); `'never'` auto-rejects every ask without
-   * prompting (the deterministic CI/unattended stance); `'auto'` resolves
-   * every ask without prompting through the rule-gated stance.
+   * prompting (the deterministic CI/unattended stance).
    */
   readonly policy?: ApprovalPolicy
-  /**
-   * Forbid the `'auto'` policy for this deployment: selecting it on a live
-   * session throws, the policy context states it is disabled, and any ask a
-   * session already carrying `auto` resolves `'rejected'`. A managed
-   * deployment sets this to keep unattended rule-gated execution opt-in.
-   */
-  readonly disableAutoMode?: boolean
 }
 
 /**
@@ -3004,16 +3000,11 @@ export interface Config {
  * - `'never'` — never prompt anyone: every ask resolves `'rejected'`
  *   deterministically. The strict headless stance (CI, unattended runs) and
  *   the policy whose outcome is knowable without asking.
- * - `'auto'` — the rule-gated stance: asks never reach a human. The owning
- *   tools already resolved everything the rules allow (read-only and
- *   allow-listed calls run free), so a surviving ask is outside the heuristic
- *   and resolves `'rejected'` deterministically. A deployment can forbid the
- *   policy with {@link Config.disableAutoMode}.
  */
-export type ApprovalPolicy = 'ask' | 'never' | 'auto'
+export type ApprovalPolicy = 'ask' | 'never'
 ```
 
-Source: [`packages/interaction/user-approval/src/index.ts:193`](../packages/interaction/user-approval/src/index.ts)
+Source: [`packages/interaction/user-approval/src/index.ts:177`](../packages/interaction/user-approval/src/index.ts)
 
 <a id="deepseek-aidsh-web"></a>
 

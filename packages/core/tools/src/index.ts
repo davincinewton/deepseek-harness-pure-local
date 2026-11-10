@@ -1712,13 +1712,6 @@ export class ToolRuntime extends Service {
     })
     switch (outcome) {
       case 'allowed-once': return { decision: { kind: 'allow' }, approvalCancelled: false }
-      case 'allowed-for-session': return {
-        // Unreachable for this caller: it never advertises `allowSession`, so
-        // the approval service normalizes the outcome to 'unavailable' before
-        // returning. Kept explicit so the closed union stays exhaustive.
-        decision: { kind: 'deny', reason: `tool "${exec.name}" has no session grant to record; allow once instead` },
-        approvalCancelled: false,
-      }
       case 'rejected': return {
         decision: { kind: 'deny', reason: `the user rejected tool "${exec.name}"` },
         approvalCancelled: false,

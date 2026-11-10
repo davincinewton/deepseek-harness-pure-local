@@ -106,9 +106,6 @@ export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void
       // an escalating call throws its distinct text on any non-grant.
       const sandboxPolicy = await sandbox.resolvePolicy('write', args, exec)
       const target = await ctx.fs.resolve(input.filePath, sessionResolveOptions(exec, input.filePath, sandboxPolicy?.workspaceRoot))
-      // Path rules gate the resolved target: a deny rule blocks, an ask rule
-      // prompts, no match keeps the standing fence behavior.
-      await sandbox.gate('write', target.displayPath, exec)
       // Single-slot decision: the policy plugin produces createIfAbsent/
       // replaceIfVersion; the bare default is undefined (unconditional). No stat.
       const intent = await ctx.waterfall('fs/write-intent', target, exec, () => undefined)

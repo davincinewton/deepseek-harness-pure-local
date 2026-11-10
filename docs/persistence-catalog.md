@@ -561,30 +561,6 @@ Source: [`packages/core/session/src/types.ts:304`](../packages/core/session/src/
 
 ### `sandbox/*`
 
-<a id="sandboxgrant--log-only"></a>
-
-#### `sandbox/grant` — log-only
-
-```ts persistence-catalog
-/**
- * A human authorized unconfined use of one sandbox mode for the rest of
- * the session — log-only (like `approval/*`; NOT a surface event, carries
- * no `surfaceOp`): durable and replayable, never in the model transcript.
- * An absent `root` covers bash calls (which carry no path); a `root`
- * covers filesystem targets at or below that path. Bash and filesystem
- * grants never cover each other. The NEXT `sandbox/mode` switch drops
- * every earlier grant ({@link effectiveGrants}).
- */
-'sandbox/grant': {
-  /** The mode the grant was made under (the session's mode at grant time). */
-  mode: SandboxMode
-  /** Root path a filesystem grant covers (the gate's match key); absent for bash. */
-  root?: string
-}
-```
-
-Source: [`packages/sandbox/sandbox-policy/src/grants.ts:32`](../packages/sandbox/sandbox-policy/src/grants.ts)
-
 <a id="sandboxmode--log-only"></a>
 
 #### `sandbox/mode` — log-only

@@ -352,8 +352,6 @@ describe('ApprovalService.request', () => {
 describe('approval policy (the approval/policy fold)', () => {
   const NEVER_SENTENCE = 'Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`).'
   const ASK_SENTENCE = 'Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed.'
-  const AUTO_SENTENCE = 'Approval policy: auto. Actions that require approval are decided by the permission rules without prompting: read-only and allow-listed operations proceed, everything else is rejected. Do not attempt to escalate — no prompt will happen.'
-  const AUTO_DISABLED_SENTENCE = 'Approval policy: auto is disabled in this deployment; every action that requires approval is rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`).'
 
   /**
    * An agent stand-in over a REAL Session — gate and context fold real events;
@@ -380,95 +378,8 @@ describe('approval policy (the approval/policy fold)', () => {
     const session = { append } as unknown as Session
 
     expect(() => { setApprovalPolicy(session, 'sometimes' as Parameters<typeof setApprovalPolicy>[1]) })
-      .toThrow('approval policy must be one of "ask", "never" or "auto"')
+      .toThrow('approval policy must be one of "ask" or "never"')
     expect(append).not.toHaveBeenCalled()
-  })
-
-  it('an auto config rejects deterministically without consulting any answerer', async () => {
-    const ctx = new Context()
-    await ctx.plugin(ApprovalService, { policy: 'auto' })
-    const consulted = vi.fn()
-    ctx.on('approval/request', (_req, next) => { consulted(); return next() })
-    const { agent, session } = sessionAgent('sess-auto-gate')
-    await expect(ctx.approval.request({ agent, toolName: 'bash' })).resolves.toBe('rejected')
-    expect(consulted).not.toHaveBeenCalled()
-    // Deterministic policies still audit the asked/decided pair.
-    expect(session.events.filter(e => e.type === 'approval/decided')[0]?.data).toMatchObject({ outcome: 'rejected' })
-  })
-
-  it('auto is unbypassable even by an answerer PREPENDED after the service mounts', async () => {
-    const ctx = new Context()
-    await ctx.plugin(ApprovalService, { policy: 'auto' })
-    const consulted = vi.fn()
-    ctx.on('approval/request', () => { consulted(); return Promise.resolve<ApprovalOutcome>('allowed-once') }, { prepend: true })
-    const { agent } = sessionAgent('sess-auto-prepend')
-    await expect(ctx.approval.request({ agent, toolName: 'bash' })).resolves.toBe('rejected')
-    expect(consulted).not.toHaveBeenCalled()
-  })
-
-  it('a deployment may forbid auto: composing it as the default fails loud', async () => {
-    const ctx = new Context()
-    await expect(ctx.plugin(ApprovalService, { policy: 'auto', disableAutoMode: true }))
-      .rejects.toThrow(/disableAutoMode forbids it/)
-  })
-
-  it('a forbidden auto switch throws, and a log already carrying auto still rejects', async () => {
-    const ctx = new Context()
-    await ctx.plugin(ApprovalService, { disableAutoMode: true })
-    expect(ctx.approval.autoModeDisabled).toBe(true)
-    const { agent, session } = sessionAgent('sess-auto-forbidden')
-    const inject = vi.fn<Agent['inject']>()
-    expect(() => { ctx.approval.setPolicy({ ...agent, inject }, 'auto') })
-      .toThrow(/disabled in this deployment/)
-    expect(inject).not.toHaveBeenCalled()
-    // A seeded log (e.g. resumed from elsewhere) cannot opt back in.
-    setApprovalPolicy(session, 'auto')
-    await expect(ctx.approval.request({ agent, toolName: 'bash' })).resolves.toBe('rejected')
-  })
-
-  it('states auto and a disabled auto as cache-safe context', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    const enabled = new Context()
-    await enabled.plugin(SystemPrompt)
-    await ctx.plugin(ApprovalService)
-    await enabled.plugin(ApprovalService, { disableAutoMode: true })
-    const autoAgent = sessionAgent('sess-sect-auto')
-    const disabledAgent = sessionAgent('sess-sect-auto-off')
-    setApprovalPolicy(autoAgent.session, 'auto')
-    setApprovalPolicy(disabledAgent.session, 'auto')
-    const contextFor = async (context: object) =>
-      (await ctx.systemPrompt.assemble(context)).contexts.find(entry => entry.name === 'approval:policy')?.text
-    expect(await contextFor({ agent: autoAgent.agent })).toBe(AUTO_SENTENCE)
-    expect((await enabled.systemPrompt.assemble({ agent: disabledAgent.agent })).contexts
-      .find(entry => entry.name === 'approval:policy')?.text).toBe(AUTO_DISABLED_SENTENCE)
-  })
-
-  it('a log carrying an unknown policy trips the exhaustiveness guard in both folds', async () => {
-    // The closed union is trusted at this typed same-process boundary; a
-    // durable value from a build that knows more policies must not fall
-    // through to a prompt or an empty sentence.
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ApprovalService)
-    const { agent, session } = sessionAgent('sess-bogus-policy')
-    session.append('approval/policy', { policy: 'sometimes' as never })
-    await expect(ctx.approval.request({ agent, toolName: 'bash' })).rejects
-      .toThrow('unreachable variant in ApprovalPolicy: "sometimes"')
-    await expect(ctx.systemPrompt.assemble({ agent })).rejects
-      .toThrow('unreachable variant in ApprovalPolicy: "sometimes"')
-  })
-
-  it('returns allowed-for-session only when the asker advertised allowSession', async () => {
-    const ctx = await mounted()
-    ctx.on('approval/request', () => Promise.resolve<ApprovalOutcome>('allowed-for-session'))
-    const { agent, appended } = fakeAgent()
-    await expect(ctx.approval.request(requestOf(agent, { allowSession: true }))).resolves.toBe('allowed-for-session')
-    expect(appended[1]?.data).toMatchObject({ outcome: 'allowed-for-session' })
-    // The same rogue answer on a non-grantable ask fails closed instead.
-    const second = fakeAgent()
-    await expect(ctx.approval.request(requestOf(second.agent))).resolves.toBe('unavailable')
-    expect(second.appended[1]?.data).toMatchObject({ outcome: 'unavailable' })
   })
 
   it('defaults a schema-less construction to ask (the ?? narrows the optional TYPE)', async () => {
