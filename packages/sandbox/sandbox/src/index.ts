@@ -19,6 +19,16 @@ export {
 } from './escalation.ts'
 export type { EscalationApproval, EscalationApprover, EscalationOutcome, EscalationRequest } from './escalation.ts'
 export { canonicalPath, writableRoots } from './roots.ts'
+export { isReadOnlyBashCommand, isReadOnlySimpleCommand } from './read-only.ts'
+export {
+  decide,
+  decideRaw,
+  matchBashRule,
+  matchFsRule,
+  parsePermissionRule,
+  parseRules,
+} from './rules.ts'
+export type { PermissionEffect, PermissionRule, PermissionRules } from './rules.ts'
 
 /**
  * File-effect policy for confined processes. `read-only` permits only required
@@ -52,11 +62,14 @@ export interface SandboxExecutionPolicy {
 }
 
 /**
- * Enforcement completeness for this host. `partial` means an active backend or
- * older kernel ABI cannot govern every promised file effect; callers requiring
- * an absolute boundary must not treat it as `full`.
+ * Enforcement completeness for one execution. `full` means the selected backend
+ * governs every promised file effect; `partial` means an active backend or older
+ * kernel ABI cannot govern every promised file effect (callers requiring an
+ * absolute boundary must not treat it as `full`); `none` means NO backend
+ * confined the execution — it ran unconfined under the caller's rule/approval
+ * gate (the no-backend fallback), so it carries no kernel boundary at all.
  */
-export type SandboxEnforcement = 'full' | 'partial'
+export type SandboxEnforcement = 'full' | 'partial' | 'none'
 
 /**
  * What one confined execution is allowed to touch — carried PER CALL, not
@@ -159,6 +172,19 @@ export abstract class SandboxProvider extends Service {
   /* v8 ignore next -- abstract service construction is covered through concrete provider packages. */
   constructor(ctx: Context) {
     super(ctx, 'sandbox')
+  }
+
+  /**
+   * Whether a confining runner is usable on this host for this provider's
+   * platform chain — the capability a consumer queries BEFORE deciding to
+   * confine. The default is the conservative `false` ("I cannot confine"); a
+   * provider that can actually confine overrides it to report its real verdict.
+   * This is a capability query only — it does NOT relax {@link confine}, which
+   * still fails closed when no backend is present.
+   * @returns true when a confining runner is available for confined modes.
+   */
+  backendAvailable(): boolean {
+    return false
   }
 
   /**

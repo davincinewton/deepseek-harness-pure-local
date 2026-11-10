@@ -20,7 +20,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, canonicalPath, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, approveEscalation, canonicalPath, decide, parseRules, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-shell'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
@@ -30,15 +30,30 @@ import { parseExitStatus, renderProcessRead, renderResult } from './render.ts'
 export const name = 'tool-bash'
 export const inject = ['tools', 'shell', 'systemPrompt', 'shellEnv']
 
+/** Bash rule text grouped by effect; any group may be omitted. */
+interface BashRulesConfig {
+  allow?: string[]
+  ask?: string[]
+  deny?: string[]
+}
+
 /** Configuration for the bash tool. */
 export interface Config {
   /** Expose `run_in_background` (default true); disabled calls are also rejected. */
   enableRunInBackground?: boolean
+  /** Declarative `Tool(specifier)` rules for this tool (deny > ask > allow; default none). */
+  rules?: BashRulesConfig
 }
 
 /** Runtime configuration schema for the bash tool plugin. */
 export const Config: z<Config> = z.object({
   enableRunInBackground: z.boolean().default(true),
+  // Prevent Schemastery from materializing omitted rule groups (mirror tool-subagent).
+  rules: z.object({
+    allow: z.array(z.string()).default(undefined as unknown as string[]),
+    ask: z.array(z.string()).default(undefined as unknown as string[]),
+    deny: z.array(z.string()).default(undefined as unknown as string[]),
+  }).default(undefined as unknown as { allow: string[]; ask: string[]; deny: string[] }),
 })
 
 /** Parsed tool args; execute validates value constraints absent from ParameterSchemaSpec. */
@@ -189,6 +204,9 @@ const BACKGROUND_OUTPUT_PROPERTIES = {
 
 export function apply(ctx: Context, config: Config = {}): void {
   const backgroundEnabled = config.enableRunInBackground ?? true
+  // Rule text is parsed once at load: a malformed rule fails the composition at
+  // startup, never at the call it was meant to gate.
+  const permissionRules = parseRules(config.rules ?? {})
   const defaultMode = ctx.shell.sandboxMode
   const escalationModes: readonly SandboxMode[] = defaultMode === undefined ? [] : ESCALATION_TARGETS
   const sandboxPolicy: SandboxPolicyService | undefined = defaultMode === undefined ? undefined : ctx.get('sandboxPolicy')
@@ -331,12 +349,52 @@ export function apply(ctx: Context, config: Config = {}): void {
       validateBashArgs(args)
       // Description is display metadata; workdir defaults to the caller's session.
       const standingPolicy = resolveSandboxPolicy(exec)
-      const approvedMode = args.sandbox_permissions !== undefined && args.justification !== undefined
-        ? await approveBashEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
-        : undefined
-      const policy = approvedMode === undefined
-        ? standingPolicy
-        : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }
+      // Rules gate first: a deny rule blocks the call under every mode (deny is
+      // bypass-proof operator policy), and the allow/ask fold decides whether a
+      // command the fallback would run unconfined needs an approval prompt.
+      const commandDecision = decide(permissionRules, 'bash', { command: args.command })
+      if (commandDecision === 'deny') {
+        throw new Error(`this command is denied by a permission rule: ${args.command}`)
+      }
+      // No-backend fallback: a confining mode with no usable backend cannot be
+      // confined, so it is gated by the rule decision (read-only commands pass
+      // through without a prompt), then runs unconfined (reported as the
+      // requested mode with enforcement 'none').
+      const noBackend = standingPolicy !== undefined
+        && standingPolicy.mode !== 'danger-full-access'
+        && !ctx.shell.backendAvailable()
+      let fallbackOriginalMode: SandboxMode | undefined
+      let policy: SandboxExecutionPolicy | undefined
+      if (noBackend && standingPolicy !== undefined) {
+        if (commandDecision === 'ask') {
+          const approval = ctx.get('approval')
+          if (approval === undefined || exec.agent === undefined) {
+            throw new Error(
+              'no sandbox backend is available on this host and this command is not read-only; '
+              + 'it requires approval, but no approval channel is available',
+            )
+          }
+          const outcome = await approval.request({
+            agent: exec.agent,
+            toolName: 'bash',
+            callId: exec.callId,
+            reason: `run a non-read-only command without a sandbox backend: ${args.command}`,
+            signal: exec.signal,
+          })
+          if (outcome !== 'allowed-once') {
+            throw new Error(`this command was not approved to run without a sandbox backend (outcome: ${outcome})`)
+          }
+        }
+        fallbackOriginalMode = standingPolicy.mode
+        policy = { ...standingPolicy, mode: 'danger-full-access' }
+      } else {
+        const approvedMode = args.sandbox_permissions !== undefined && args.justification !== undefined
+          ? await approveBashEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
+          : undefined
+        policy = approvedMode === undefined
+          ? standingPolicy
+          : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }
+      }
       const workdir = resolveWorkdir(args.workdir, exec, standingPolicy?.workspaceRoot)
       const dshEnv = ctx.shellEnv.collect(exec)
       const request = {
@@ -368,6 +426,12 @@ export function apply(ctx: Context, config: Config = {}): void {
           ...exec.agent ? { owner: exec.agent } : {},
           run: () => {
             const proc = ctx.shell.start(ctx.shell.resolve(request))
+            // The no-backend fallback ran unconfined: report the requested mode
+            // with enforcement 'none' (the executor stamps no facts for an
+            // unconfined run, so this is not overwritten on settlement).
+            if (fallbackOriginalMode !== undefined) {
+              proc.sandbox = { mode: fallbackOriginalMode, denied: false, enforcement: 'none' }
+            }
             return {
               cancel: () => void proc.kill(),
               done: proc.done.then(() => processOutcome(proc)),
@@ -385,6 +449,9 @@ export function apply(ctx: Context, config: Config = {}): void {
         const error = new HarnessError('tool call aborted', TOOL_ABORTED)
         error.name = 'AbortError'
         throw error
+      }
+      if (fallbackOriginalMode !== undefined) {
+        result.sandbox = { mode: fallbackOriginalMode, denied: false, enforcement: 'none' }
       }
       return { kind: 'foreground' as const, ...canonicalBashResult(result) }
     },

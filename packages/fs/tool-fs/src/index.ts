@@ -8,6 +8,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-user-approval'
+import { parseRules } from '@deepseek-ai/dsh-sandbox'
 import { applyReadTool, READ_LIMIT, STREAM_MIN_SIZE } from './read.ts'
 import { applyWriteTool } from './write.ts'
 import { applyEditTool } from './edit.ts'
@@ -21,6 +22,13 @@ export const name = 'tool-fs'
 /** Services required by the filesystem tool suite. */
 export const inject = ['tools', 'fs', 'systemPrompt']
 
+/** Filesystem rule text grouped by effect; any group may be omitted. */
+interface FsRulesConfig {
+  allow?: string[]
+  ask?: string[]
+  deny?: string[]
+}
+
 /** Plugin config (all optional — `Config` supplies the defaults). */
 export interface Config {
   /** Default and maximum number of lines returned by one `read` call. */
@@ -31,6 +39,8 @@ export interface Config {
   readMaxBytes?: number
   /** Files at or above this size stream instead of loading whole into memory. */
   readStreamMinSize?: number
+  /** Declarative `Tool(specifier)` rules gating `write`/`edit` (deny → ask overlay; default none). */
+  rules?: FsRulesConfig
 }
 
 export const Config: z<Config> = z.object({
@@ -38,6 +48,12 @@ export const Config: z<Config> = z.object({
   readMaxLineLength: z.number().default(READ_MAX_LINE_LENGTH),
   readMaxBytes: z.number().default(READ_MAX_BYTES),
   readStreamMinSize: z.number().default(STREAM_MIN_SIZE),
+  // Prevent Schemastery from materializing omitted rule groups (mirror tool-subagent).
+  rules: z.object({
+    allow: z.array(z.string()).default(undefined as unknown as string[]),
+    ask: z.array(z.string()).default(undefined as unknown as string[]),
+    deny: z.array(z.string()).default(undefined as unknown as string[]),
+  }).default(undefined as unknown as { allow: string[]; ask: string[]; deny: string[] }),
 })
 
 /** The shape after schemastery applied the defaults. */
@@ -72,8 +88,10 @@ export function apply(ctx: Context, config: Config): void {
   })
   // One escalation API shared by both mutating tools: advertisement gating,
   // per-call policy resolution, and denial-marker mapping, all keyed off whether
-  // the mounted ctx.fs confines (ctx.fs.sandboxMode).
-  const sandbox = new FsSandboxController(ctx)
+  // the mounted ctx.fs confines (ctx.fs.sandboxMode). Rule text is parsed once
+  // at load: a malformed rule fails the composition at startup.
+  const permissionRules = parseRules(config.rules ?? {})
+  const sandbox = new FsSandboxController(ctx, permissionRules)
   applyWriteTool(ctx, sandbox)
   applyEditTool(ctx, sandbox)
 }

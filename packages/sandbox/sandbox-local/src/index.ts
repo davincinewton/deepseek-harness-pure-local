@@ -303,6 +303,20 @@ export class LocalSandboxProvider extends SandboxProvider {
   }
 
   /**
+   * Whether a confining runner is usable on this host: a configured
+   * `runnerCommand` is the operator's assertion (always available), otherwise
+   * the platform chain's cached verdict (probed once, never re-probed). This is
+   * the capability the tool layer queries to choose the no-backend fallback; it
+   * does not relax {@link confine}, which still fails closed.
+   * @returns true when confined modes can actually be confined here.
+   */
+  override backendAvailable(): boolean {
+    if (this.runnerCommand !== undefined) return true
+    this.selectedRunner ??= this.chainVerdict()
+    return this.selectedRunner !== 'unavailable'
+  }
+
+  /**
    * Wrap `argv` in the selected runner's invocation for `policy` — the configured
    * `runnerCommand` when present (the operator's assertion, no probe), else the platform
    * chain's runner speaking its own profile dialect.

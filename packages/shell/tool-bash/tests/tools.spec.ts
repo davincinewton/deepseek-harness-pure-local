@@ -18,6 +18,7 @@ import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { LocalBashExecutor } from '@deepseek-ai/dsh-bash-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as BashEnvPlugin from '@deepseek-ai/dsh-shell-env'
@@ -103,8 +104,8 @@ async function callUntilText(
 class RecordingSandboxExecutor extends ShellExecutor {
   readonly modes: Array<string | undefined> = []
 
-  override get sandboxMode() {
-    return 'read-only' as const
+  override get sandboxMode(): SandboxMode {
+    return 'read-only'
   }
 
   resolve(request: ShellExecRequest): ShellExecSpec {
@@ -181,7 +182,7 @@ class CountingStartExecutor extends ShellExecutor {
   }
 }
 
-async function setupSandboxed(withApproval = false) {
+async function setupSandboxed(withApproval = false, bashConfig: { rules?: { allow?: string[]; ask?: string[]; deny?: string[] } } = {}) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -192,7 +193,7 @@ async function setupSandboxed(withApproval = false) {
   await ctx.plugin(RecordingSandboxExecutor)
   if (withApproval) await ctx.plugin(ApprovalService)
   await ctx.plugin(BashEnvPlugin)
-  await ctx.plugin(ToolBash)
+  await ctx.plugin(ToolBash, bashConfig)
   return { ctx, bash: ctx.shell as RecordingSandboxExecutor }
 }
 
@@ -714,6 +715,174 @@ describe('sandbox escalation through the generic task producer', () => {
     ctx.approval.request = () => Promise.resolve('rogue' as ApprovalOutcome)
     const result = await call(ctx, 'bash', escalate, sandboxAgent())
     expect(text(result)).toContain('unreachable variant in EscalationOutcome')
+  })
+})
+
+/** A confining executor that reports NO usable backend (the no-backend fallback). */
+class NoBackendSandboxExecutor extends RecordingSandboxExecutor {
+  override get sandboxMode() {
+    return 'workspace-write' as const
+  }
+  override backendAvailable() {
+    return false
+  }
+}
+
+async function setupNoBackend(withApproval = false, bashConfig: { rules?: { allow?: string[]; ask?: string[]; deny?: string[] } } = {}) {
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(AgentRegistry)
+  await ctx.plugin(LocalJobRegistry)
+  await ctx.plugin(ToolTasks)
+  await ctx.plugin(SandboxPolicyService, {})
+  await ctx.plugin(NoBackendSandboxExecutor)
+  if (withApproval) await ctx.plugin(ApprovalService)
+  await ctx.plugin(BashEnvPlugin)
+  await ctx.plugin(ToolBash, bashConfig)
+  return { ctx, bash: ctx.shell as NoBackendSandboxExecutor }
+}
+
+describe('no-backend fallback (confining mode, no usable runner)', () => {
+  it('runs a read-only command free and reports enforcement none under the requested mode', async () => {
+    const { ctx, bash } = await setupNoBackend()
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', { command: 'ls -la', description: 'list' }, agent)
+    expect(result.isError).toBe(false)
+    // Ran unconfined (the executor saw danger-full-access) but reported the
+    // requested mode with enforcement none.
+    expect(bash.modes).toEqual(['danger-full-access'])
+    if (result.isError) throw new Error('expected success')
+    expect(result.value).toMatchObject({ sandbox: { mode: 'workspace-write', denied: false, enforcement: 'none' } })
+  })
+
+  it('stamps the fallback fact on a background process too', async () => {
+    const { ctx, bash } = await setupNoBackend()
+    const start = vi.spyOn(bash, 'start')
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', { command: 'ls', description: 'bg list', run_in_background: true }, agent)
+    expect(result.isError).toBe(false)
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start.mock.results[0]?.value.sandbox).toEqual({ mode: 'workspace-write', denied: false, enforcement: 'none' })
+  })
+
+  it('prompts for a non-read-only command and runs it once approved', async () => {
+    const { ctx, bash } = await setupNoBackend(true)
+    const prompted = vi.fn()
+    ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', { command: 'npm install', description: 'install' }, agent)
+    expect(result.isError).toBe(false)
+    expect(prompted).toHaveBeenCalledTimes(1)
+    expect(bash.modes).toEqual(['danger-full-access'])
+    if (result.isError) throw new Error('expected success')
+    expect(result.value).toMatchObject({ sandbox: { mode: 'workspace-write', denied: false, enforcement: 'none' } })
+  })
+
+  it('does not prompt for a compound command whose parts are all read-only', async () => {
+    const { ctx } = await setupNoBackend(true)
+    const prompted = vi.fn()
+    ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', { command: 'ls && cat a', description: 'list and print' }, agent)
+    expect(result.isError).toBe(false)
+    expect(prompted).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-read-only command when approval is rejected', async () => {
+    const { ctx, bash } = await setupNoBackend(true)
+    ctx.on('approval/request', () => Promise.resolve<ApprovalOutcome>('rejected'))
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', { command: 'rm -rf x', description: 'remove' }, agent)
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('not approved to run without a sandbox backend')
+    expect(bash.modes).toEqual([])
+  })
+
+  it('fails closed for a non-read-only command with no approval channel', async () => {
+    const noService = await setupNoBackend()
+    const agent = sandboxAgent('workspace-write', noService.ctx)
+    noService.ctx.agents.register(agent)
+    expect(text(await call(noService.ctx, 'bash', { command: 'rm -rf x', description: 'remove' }, agent)))
+      .toContain('no approval channel is available')
+
+    const withService = await setupNoBackend(true)
+    // No agent to route through.
+    expect(text(await call(withService.ctx, 'bash', { command: 'rm -rf x', description: 'remove' })))
+      .toContain('no approval channel is available')
+  })
+
+  it('does not take the fallback when a backend IS available', async () => {
+    // setupSandboxed's executor reports backendAvailable() true → normal path.
+    const { ctx, bash } = await setupSandboxed()
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    await call(ctx, 'bash', { command: 'npm install', description: 'install' }, agent)
+    // Normal confining path: the requested mode is passed through, not the fallback.
+    expect(bash.modes).toEqual(['workspace-write'])
+  })
+})
+
+describe('permission rules gate', () => {
+  it('an allow rule frees a non-read-only command without a prompt', async () => {
+    const { ctx } = await setupNoBackend(true, { rules: { allow: ['Bash(npm install)'] } })
+    const prompted = vi.fn()
+    ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', { command: 'npm install', description: 'install' }, agent)
+    expect(result.isError).toBe(false)
+    expect(prompted).not.toHaveBeenCalled()
+  })
+
+  it('an ask rule prompts even for a read-only command', async () => {
+    const { ctx } = await setupNoBackend(true, { rules: { ask: ['Bash(ls *)'] } })
+    const prompted = vi.fn()
+    ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('rejected') })
+    const agent = sandboxAgent('workspace-write', ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', { command: 'ls -la', description: 'list' }, agent)
+    expect(prompted).toHaveBeenCalledTimes(1)
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('not approved to run without a sandbox backend')
+  })
+
+  it('a deny rule blocks the call under every mode, with or without a backend', async () => {
+    const rules = { deny: ['Bash(curl *)'] }
+    const noBackend = await setupNoBackend(true, { rules })
+    const nbAgent = sandboxAgent('workspace-write', noBackend.ctx)
+    noBackend.ctx.agents.register(nbAgent)
+    expect(text(await call(noBackend.ctx, 'bash', { command: 'curl http://x', description: 'fetch' }, nbAgent)))
+      .toContain('denied by a permission rule')
+
+    // Backend present, confined mode: deny still blocks before any run.
+    const confined = await setupSandboxed(false, { rules })
+    const cAgent = sandboxAgent('workspace-write', confined.ctx)
+    confined.ctx.agents.register(cAgent)
+    expect(text(await call(confined.ctx, 'bash', { command: 'curl http://x', description: 'fetch' }, cAgent)))
+      .toContain('denied by a permission rule')
+    expect(confined.bash.modes).toEqual([])
+
+    // Even a danger-full-access session cannot bypass a deny rule.
+    const full = await setupSandboxed(false, { rules })
+    const fAgent = sandboxAgent('danger-full-access', full.ctx)
+    full.ctx.agents.register(fAgent)
+    expect(text(await call(full.ctx, 'bash', { command: 'curl http://x', description: 'fetch' }, fAgent)))
+      .toContain('denied by a permission rule')
+  })
+
+  it('a malformed rule text fails the composition at load', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(RecordingSandboxExecutor)
+    await ctx.plugin(BashEnvPlugin)
+    await expect(ctx.plugin(ToolBash, { rules: { deny: ['not a rule (x'] } })).rejects.toThrow(/invalid permission rule/)
   })
 })
 

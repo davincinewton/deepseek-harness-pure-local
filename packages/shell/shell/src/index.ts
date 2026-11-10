@@ -77,6 +77,19 @@ export abstract class ShellExecutor extends Service {
   }
 
   /**
+   * Whether a confining backend is usable on this host for this executor's
+   * confinement — consulted by the tool layer only when {@link sandboxMode} is
+   * defined (a confining executor), to choose the no-backend fallback. The
+   * default is `true` ("assume the normal confining path"); a confining
+   * executor overrides it to report its provider's real verdict. A
+   * non-sandboxing executor (sandboxMode undefined) never has this consulted.
+   * @returns true when confined modes can be confined on this host.
+   */
+  backendAvailable(): boolean {
+    return true
+  }
+
+  /**
    * Apply implementation-owned defaults and caps to a request before execution.
    * @param request - the caller's request; omitted fields get this
    *   implementation's defaults, capped fields are clamped.
