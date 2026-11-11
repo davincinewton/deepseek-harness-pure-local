@@ -201,7 +201,9 @@ export class PermissionPresetService extends Service {
     const baseSettings: PermissionSettings = { defaultPreset }
     this.defaultSettings = () => baseSettings
     const presetChoices = this.names.map((name) => {
-      const choice = z.const(name)
+      // `extra.sandbox` lets confirmation gates in the clients key on what a
+      // preset WRITES (full access) rather than on its name.
+      const choice = z.const(name).extra('extra', { sandbox: this.presets[name]?.sandbox })
       const label = this.presets[name]?.name
       return label === undefined ? choice : choice.description(label)
     })
@@ -237,6 +239,7 @@ export class PermissionPresetService extends Service {
         value: zod.string().min(1),
         name: zod.string().min(1),
         description: zod.string().optional(),
+        sandbox: zod.union([zod.literal('workspace-write'), zod.literal('danger-full-access')]).optional(),
       })),
       currentValue: zod.string().min(1),
     }) as unknown as zod.ZodType<PermissionSelect>
@@ -363,7 +366,12 @@ export class PermissionPresetService extends Service {
       return { value: CUSTOM_PRESET, name: 'Custom', description: 'Current sandbox and approval settings do not match a preset.' }
     }
     const spec = this.resolve(name)
-    return { value: name, name: spec.name ?? name, ...spec.description !== undefined ? { description: spec.description } : {} }
+    return {
+      value: name,
+      name: spec.name ?? name,
+      sandbox: spec.sandbox,
+      ...spec.description !== undefined ? { description: spec.description } : {},
+    }
   }
 
   /**

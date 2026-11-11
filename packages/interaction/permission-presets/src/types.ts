@@ -17,6 +17,13 @@ export interface PresetOption {
   name: string
   /** One user-facing sentence on what the value means; omitted when not configured. */
   description?: string
+  /**
+   * The sandbox mode selecting this option would write, when the option is a
+   * preset (`custom` carries none). Confirmation gates key on this fact —
+   * NOT on the option name — so any preset that widens to full access is
+   * gated, whatever it is called.
+   */
+  sandbox?: 'workspace-write' | 'danger-full-access'
 }
 
 /**

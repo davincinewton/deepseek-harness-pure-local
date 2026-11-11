@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "op": "initialize"
+    },
+    {
+      "op": "newSession"
+    },
+    {
+      "op": "prompt",
+      "text": "Use the write tool (NOT bash) to create /dsh-acp-fs-gate.txt containing exactly the single line: gate. The path is deliberately outside the workspace, so the write raises a permission prompt; the client answers it. Do not retry with another path and do not call bash. After the result, reply with exactly the single word DONE."
+    }
+  ],
+  "permissionAnswers": [
+    {
+      "kind": "reject_once"
+    }
+  ]
+}

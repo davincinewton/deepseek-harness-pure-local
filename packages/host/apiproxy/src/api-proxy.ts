@@ -652,6 +652,8 @@ interface PendingApproval {
   toolName: string
   callId?: CallId
   reason?: string
+  /** The asker honors the session-wide answer; the frame advertises it. */
+  allowFullAccess?: boolean
   resolve(outcome: ApprovalOutcome): void
 }
 
@@ -666,6 +668,7 @@ function requestedFrame(pending: PendingApproval): RpcRequest<MuxFrame> {
       toolName: pending.toolName,
       ...pending.callId === undefined ? {} : { callId: pending.callId },
       ...pending.reason === undefined ? {} : { reason: pending.reason },
+      ...pending.allowFullAccess === true ? { allowFullAccess: true } : {},
     },
   }
 }
@@ -1447,6 +1450,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           toolName: req.toolName,
           ...req.callId === undefined ? {} : { callId: req.callId },
           ...req.reason === undefined ? {} : { reason: req.reason },
+          ...req.allowFullAccess === true ? { allowFullAccess: true } : {},
           resolve: settle,
         }
         pendingApprovals.set(pending.rpcId, pending)
@@ -3640,6 +3644,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         // The payload's audit correlation must match the entry the rpcId routed
         // to — a mismatched answer is malformed, not merely late.
         if (!parsed.success || parsed.data.approvalId !== approval.approvalId || parsed.data.sessionId !== approval.sessionId) {
+          return Promise.resolve({ accepted: false, reason: 'bad-response' })
+        }
+        // The session-wide answer is valid only on an ask that advertised it.
+        if (parsed.data.outcome === 'allowed-full-access' && approval.allowFullAccess !== true) {
           return Promise.resolve({ accepted: false, reason: 'bad-response' })
         }
         approval.resolve(parsed.data.outcome)

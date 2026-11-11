@@ -80,11 +80,47 @@ async function waitForCount(mux: { frames: MuxFrame[] }, type: MuxFrame['type'],
   expect(mux.frames.filter(frame => frame.type === type).length).toBeGreaterThanOrEqual(count)
 }
 
-function answer(rpcId: RpcId, sessionId: unknown, approvalId: ApprovalRequestId, outcome: 'allowed-once' | 'rejected'): Parameters<ApiProxy['respond']>[0] {
+function answer(rpcId: RpcId, sessionId: unknown, approvalId: ApprovalRequestId, outcome: 'allowed-once' | 'allowed-full-access' | 'rejected'): Parameters<ApiProxy['respond']>[0] {
   return { type: 'client-response', rpcId, result: { ok: true, value: { sessionId, approvalId, outcome } } }
 }
 
 describe('approval pending registry', () => {
+  it('advertises allowFullAccess on the frame and accepts the session-wide answer', async () => {
+    const { ctx, api } = await harness()
+    const abort = new AbortController()
+    const mux = openMux(api, abort)
+    const agent = agentOf(ctx)
+
+    const asked = ctx.approval.request({ agent, toolName: 'write', reason: 'outside workspace', allowFullAccess: true })
+    const requested = requestedOf(await mux.waitFor('approval/requested'))
+    expect(requested.allowFullAccess).toBe(true)
+
+    const envelope = mux.envelopes.find(e => e.payload.type === 'approval/requested') as RpcRequest<MuxFrame>
+    const receipt = await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'allowed-full-access'))
+    expect(receipt).toEqual({ accepted: true })
+    await expect(asked).resolves.toBe('allowed-full-access')
+    abort.abort()
+  })
+
+  it('rejects the session-wide answer on an ask that did not advertise it', async () => {
+    const { ctx, api } = await harness()
+    const abort = new AbortController()
+    const mux = openMux(api, abort)
+    const agent = agentOf(ctx)
+
+    const asked = ctx.approval.request({ agent, toolName: 'bash', reason: 'plain ask' })
+    const requested = requestedOf(await mux.waitFor('approval/requested'))
+    expect(requested.allowFullAccess).toBeUndefined()
+
+    const envelope = mux.envelopes.find(e => e.payload.type === 'approval/requested') as RpcRequest<MuxFrame>
+    const rogue = await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'allowed-full-access'))
+    expect(rogue).toEqual({ accepted: false, reason: 'bad-response' })
+    const ok = await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'rejected'))
+    expect(ok).toEqual({ accepted: true })
+    await expect(asked).resolves.toBe('rejected')
+    abort.abort()
+  })
+
   it('round-trips ask → requested frame → respond → outcome + resolved broadcast', async () => {
     const { ctx, api } = await harness()
     const abort = new AbortController()

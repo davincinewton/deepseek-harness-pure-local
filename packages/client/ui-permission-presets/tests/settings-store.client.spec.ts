@@ -7,8 +7,8 @@ import {
 const SCHEMA = {
   uid: 6,
   refs: {
-    1: { type: 'const', value: 'read-only' },
-    2: { type: 'const', meta: { description: 'Workspace' }, value: 'workspace-write' },
+    1: { type: 'const', meta: { extra: { sandbox: 'danger-full-access' } }, value: 'danger-full-access' },
+    2: { type: 'const', meta: { description: 'Workspace', extra: { sandbox: 'workspace-write' } }, value: 'workspace-write' },
     3: { type: 'union', list: [1, 2] },
     6: { type: 'object', dict: { defaultPreset: 3 } },
   },
@@ -19,7 +19,7 @@ function view(defaultPreset: string, revision = 0, schema: SettingsNamespaceView
     ns: 'permission',
     schema,
     value: { defaultPreset },
-    base: { defaultPreset: 'read-only' },
+    base: { defaultPreset: 'workspace-write' },
     applies: 'live',
     secrets: [],
     revision,
@@ -32,48 +32,58 @@ function ok<T>(value: T) {
 
 describe('permission settings store', () => {
   it('derives dynamic options and host labels from the descriptor schema', () => {
-    expect(permissionDefaultOf(view('read-only'))).toEqual({
-      currentValue: 'read-only',
+    expect(permissionDefaultOf(view('danger-full-access'))).toEqual({
+      currentValue: 'danger-full-access',
       options: [
-        { id: 'read-only', label: 'Read Only' },
-        { id: 'workspace-write', label: 'Workspace' },
+        { id: 'danger-full-access', label: 'Full access', sandbox: 'danger-full-access' },
+        { id: 'workspace-write', label: 'Workspace', sandbox: 'workspace-write' },
       ],
     })
-    const single = {
+    // A preset named anything at all is gated by its sandbox mode alone.
+    const unnamedFull = {
       uid: 2,
       refs: {
-        1: { type: 'const', meta: { description: '' }, value: 'read-only' },
+        1: { type: 'const', meta: { extra: { sandbox: 'danger-full-access' } }, value: 'wildcard' },
         2: { type: 'object', dict: { defaultPreset: 1 } },
       },
     }
-    expect(permissionDefaultOf(view('read-only', 0, single))).toEqual({
-      currentValue: 'read-only',
-      options: [{ id: 'read-only', label: 'Read Only' }],
+    expect(permissionDefaultOf(view('wildcard', 0, unnamedFull)).options)
+      .toEqual([{ id: 'wildcard', label: 'Wildcard', sandbox: 'danger-full-access' }])
+    const single = {
+      uid: 2,
+      refs: {
+        1: { type: 'const', meta: { description: '' }, value: 'preset-a' },
+        2: { type: 'object', dict: { defaultPreset: 1 } },
+      },
+    }
+    expect(permissionDefaultOf(view('preset-a', 0, single))).toEqual({
+      currentValue: 'preset-a',
+      options: [{ id: 'preset-a', label: 'Preset A' }],
     })
     const undescribed = {
       uid: 2,
       refs: {
-        1: { type: 'const', meta: { description: 7 }, value: 'read-only' },
+        1: { type: 'const', meta: { description: 7 }, value: 'preset-a' },
         2: { type: 'object', dict: { defaultPreset: 1 } },
       },
     }
-    expect(permissionDefaultOf(view('read-only', 0, undescribed)).options)
-      .toEqual([{ id: 'read-only', label: 'Read Only' }])
+    expect(permissionDefaultOf(view('preset-a', 0, undescribed)).options)
+      .toEqual([{ id: 'preset-a', label: 'Preset A' }])
   })
 
   it('rejects malformed values and dynamic enums at the wire boundary', () => {
-    expect(() => permissionDefaultOf({ ...view('read-only'), value: {} })).toThrow(/no defaultPreset value/)
-    expect(() => permissionDefaultOf(view('read-only', 0, {
+    expect(() => permissionDefaultOf({ ...view('preset-a'), value: {} })).toThrow(/no defaultPreset value/)
+    expect(() => permissionDefaultOf(view('preset-a', 0, {
       uid: 1, refs: { 1: { type: 'object', dict: {} } },
     }))).toThrow(/no defaultPreset field/)
-    expect(() => permissionDefaultOf(view('read-only', 0, {
+    expect(() => permissionDefaultOf(view('preset-a', 0, {
       uid: 2,
       refs: {
         1: { type: 'union' },
         2: { type: 'object', dict: { defaultPreset: 1 } },
       },
     }))).toThrow(/does not advertise/)
-    expect(() => permissionDefaultOf(view('read-only', 0, {
+    expect(() => permissionDefaultOf(view('preset-a', 0, {
       uid: 4,
       refs: {
         1: { type: 'string' },
@@ -89,7 +99,7 @@ describe('permission settings store', () => {
     const describe = vi.fn(() => Promise.resolve(ok({
       writable: true,
       hasDocument: false,
-      namespaces: [view('read-only', 4)],
+      namespaces: [view('workspace-write', 4)],
     })))
     const mutate = vi.fn(() => Promise.resolve(ok(view('workspace-write', 5))))
     const controller = new PermissionPresetSettingsController({
@@ -99,7 +109,7 @@ describe('permission settings store', () => {
     expect(controller.store.getSnapshot()).toMatchObject({
       status: 'ready',
       writable: true,
-      currentValue: 'read-only',
+      currentValue: 'workspace-write',
       revision: 4,
     })
     await controller.select('workspace-write')
@@ -125,7 +135,7 @@ describe('permission settings store', () => {
 
     const failing = new PermissionPresetSettingsController({
       settings: {
-        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('read-only')] })),
+        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('workspace-write')] })),
         mutate: () => Promise.resolve({
           rpcId: 'test',
           result: {
@@ -147,7 +157,7 @@ describe('permission settings store', () => {
     }>>>()
     const describe = vi.fn()
       .mockImplementationOnce(() => first.promise)
-      .mockResolvedValueOnce(ok({ writable: false, hasDocument: false, namespaces: [view('read-only', 2)] }))
+      .mockResolvedValueOnce(ok({ writable: false, hasDocument: false, namespaces: [view('workspace-write', 2)] }))
     const mutate = vi.fn()
     const controller = new PermissionPresetSettingsController({
       settings: { describe, mutate } as never,
@@ -157,7 +167,7 @@ describe('permission settings store', () => {
     first.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('workspace-write', 1)] }))
     await stale
     expect(controller.store.getSnapshot()).toMatchObject({
-      currentValue: 'read-only',
+      currentValue: 'workspace-write',
       writable: false,
       revision: 2,
     })
@@ -201,7 +211,7 @@ describe('permission settings store', () => {
     expect(describe).not.toHaveBeenCalled()
     const loading = idle.load()
     idle.dispose()
-    read.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('read-only')] }))
+    read.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('workspace-write')] }))
     await loading
     expect(idle.store.getSnapshot().status).toBe('loading')
 
@@ -222,7 +232,7 @@ describe('permission settings store', () => {
     const activeDescribe = vi.fn(() => Promise.resolve(ok({
       writable: true,
       hasDocument: false,
-      namespaces: [view('read-only')],
+      namespaces: [view('workspace-write')],
     })))
     const active = new PermissionPresetSettingsController({
       settings: {
@@ -242,7 +252,7 @@ describe('permission settings store', () => {
     const rejectedMutation = Promise.withResolvers<ReturnType<typeof ok<SettingsNamespaceView>>>()
     const disposedWrite = new PermissionPresetSettingsController({
       settings: {
-        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('read-only')] })),
+        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('workspace-write')] })),
         mutate: () => rejectedMutation.promise,
       } as never,
     })

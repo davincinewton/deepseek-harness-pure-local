@@ -23,7 +23,10 @@ export function ApprovalRequestId(id: string): ApprovalRequestId {
 }
 
 /**
- * Closed approval outcomes: a one-shot grant, explicit rejection, withdrawn
- * request, or unavailable answerer. Callers fail closed on `unavailable`.
+ * Closed approval outcomes: a one-shot grant, a session-wide full-access
+ * grant (offered only when the asker advertised `allowFullAccess` on its
+ * request — the asker then widens the session durably), explicit rejection,
+ * withdrawn request, or unavailable answerer. Callers fail closed on
+ * `unavailable`.
  */
-export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+export type ApprovalOutcome = 'allowed-once' | 'allowed-full-access' | 'rejected' | 'cancelled' | 'unavailable'

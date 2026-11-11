@@ -23,7 +23,7 @@ import { startInProcessRun } from '../src/index.ts'
 
 type Script = ConstructorParameters<typeof MockAdapter>[0]
 
-const POLICY_DENIAL = '[sandbox: file access denied under workspace-write mode]'
+const OUTSIDE_REFUSAL = 'it is outside the workspace and permitted roots'
 const contexts: Context[] = []
 let workspace: string
 
@@ -98,7 +98,7 @@ describe('in-process policy inheritance', () => {
       const child = run.localAgent as Agent
 
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-      expect(toolResultTexts(child).join('\n')).toContain(POLICY_DENIAL)
+      expect(toolResultTexts(child).join('\n')).toContain(OUTSIDE_REFUSAL)
       expect(result.stopReason).toBe('completed')
       expect(child.session.events.slice(0, 2)).toMatchObject([
         { type: 'sandbox/mode', seq: 0, data: { mode: 'workspace-write', source: 'delegation' } },
@@ -210,7 +210,7 @@ describe('in-process policy inheritance', () => {
     }
   })
 
-  it('rejects a child escalation deterministically even when an answerer would allow it', async () => {
+  it('refuses a child outside-workspace write deterministically even when an answerer would allow it', async () => {
     const script: Script = []
     const { ctx, parent } = await setupWalled(script)
     // A granting answerer proves the pin resolves before any answerer runs.
@@ -222,12 +222,7 @@ describe('in-process policy inheritance', () => {
     const blocked = join(homedir(), 'dsh-inherit-escalation-blocked.txt')
     setSandboxMode(parent.session, 'workspace-write')
     script.push(
-      toolCallResponse('write', 'write', {
-        file_path: blocked,
-        content: 'escaped',
-        sandbox_permissions: 'danger-full-access',
-        justification: 'test escalation from a delegated child',
-      }),
+      toolCallResponse('write', 'write', { file_path: blocked, content: 'escaped' }),
       textResponse('child done'),
     )
 
@@ -238,8 +233,7 @@ describe('in-process policy inheritance', () => {
 
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       expect(consulted).toBe(false)
-      expect(toolResultTexts(child).join('\n'))
-        .toContain('the user rejected escalating this operation to "danger-full-access"')
+      expect(toolResultTexts(child).join('\n')).toContain(OUTSIDE_REFUSAL)
       const asked = child.session.events.find(
         (event): event is SessionEvent<'approval/asked'> => event.type === 'approval/asked',
       )

@@ -32,7 +32,7 @@ import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { ESCALATION_TARGETS, approveEscalation, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
-import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
+import { setSandboxMode, type SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { parseExitStatus } from '@deepseek-ai/dsh-shell'
 import { processOutcome } from './background.ts'
@@ -234,6 +234,9 @@ export function apply(ctx: Context, config: Config = {}): void {
         callId: exec.callId,
         toolName: 'pwsh',
         signal: exec.signal,
+        grantFullAccess: () => {
+          if (exec.agent !== undefined) setSandboxMode(exec.agent.session, 'danger-full-access')
+        },
       },
     )
   }

@@ -61,7 +61,7 @@ function optionsOf(value: PermissionSelect, t: (key: string) => string): SelectO
       label: displayPermissionPreset(option.value, option.name),
       ...(option.description !== undefined ? { detail: option.description } : {}),
       ...(option.value === value.currentValue ? { active: true } : {}),
-      ...(option.value === FULL_ACCESS_PRESET
+      ...(option.sandbox === FULL_ACCESS_PRESET
         ? {
           confirmation: {
             title: t('confirm.title'),

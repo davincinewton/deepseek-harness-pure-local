@@ -18,7 +18,7 @@ export {
   validateEscalationArgs,
 } from './escalation.ts'
 export type { EscalationApproval, EscalationApprover, EscalationOutcome, EscalationRequest } from './escalation.ts'
-export { canonicalPath, writableRoots } from './roots.ts'
+export { canonicalPath, isWithinWritable, writableRoots } from './roots.ts'
 
 /**
  * File-effect policy for confined processes. `workspace-write` (Mode A) permits

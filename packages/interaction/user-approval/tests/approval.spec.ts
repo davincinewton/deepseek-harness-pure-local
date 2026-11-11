@@ -56,6 +56,17 @@ describe('ApprovalService.request', () => {
     expect(appended).toHaveLength(0)
   })
 
+  it('normalizes a session-wide answer an asker did not advertise to unavailable', async () => {
+    const ctx = await mounted()
+    const { agent } = fakeAgent()
+    ctx.on('approval/request', () => Promise.resolve<ApprovalOutcome>('allowed-full-access'), { prepend: true })
+
+    await expect(ctx.approval.request(requestOf(agent, { callId: CallId('call-rogue') })))
+      .resolves.toBe('unavailable')
+    await expect(ctx.approval.request(requestOf(agent, { callId: CallId('call-advertised'), allowFullAccess: true })))
+      .resolves.toBe('allowed-full-access')
+  })
+
   it('fails closed to unavailable when nobody listens, auditing the asked/decided pair', async () => {
     const ctx = await mounted()
     const { agent, appended } = fakeAgent()

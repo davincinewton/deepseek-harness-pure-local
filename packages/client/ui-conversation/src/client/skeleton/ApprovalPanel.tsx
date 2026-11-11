@@ -13,7 +13,7 @@
 // resolved frame.
 
 import { useMemo, useState } from 'react'
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, RiskConfirmation } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { RunningToolCall } from '@deepseek-ai/dsh-client-runtime/client'
 import { PendingApproval, type ApprovalComposerProps } from '../contract/slots.ts'
 import { rootToolCall } from '../chat/tool-node-reader.ts'
@@ -49,7 +49,8 @@ export function ApprovalPanel(props: ApprovalComposerProps) {
   return <ApprovalFlow key={approval.key} pending={approval} t={props.t} {...command === undefined ? {} : { command }} />
 }
 
-function ApprovalFlow({ pending, command, t }: {
+// Exported for component tests (the composer registration wraps it unchanged).
+export function ApprovalFlow({ pending, command, t }: {
   pending: PendingApproval
   command?: string
   t: ApprovalComposerProps['t']
@@ -58,7 +59,9 @@ function ApprovalFlow({ pending, command, t }: {
   // lands; until then the buttons must not re-fire. An answer failure
   // (rejected receipt / transport) re-arms them for retry.
   const [answered, setAnswered] = useState(false)
-  const answer = (outcome: 'allowed-once' | 'rejected'): void => {
+  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
+  const [acknowledged, setAcknowledged] = useState(false)
+  const answer = (outcome: 'allowed-once' | 'allowed-full-access' | 'rejected'): void => {
     setAnswered(true)
     void pending.answer(outcome).catch(() => { setAnswered(false) })
   }
@@ -77,11 +80,44 @@ function ApprovalFlow({ pending, command, t }: {
           <Button variant="outline" className={css.reject} disabled={answered} onClick={() => { answer('rejected') }}>
             {t('approval.reject')}
           </Button>
+          {pending.allowFullAccess && (
+            <Button
+              variant="outline"
+              className={css.reject}
+              disabled={answered}
+              onClick={() => {
+                setAcknowledged(false)
+                setConfirmingFullAccess(true)
+              }}
+            >
+              {t('approval.allowFullAccess')}
+            </Button>
+          )}
           <Button variant="primary" disabled={answered} onClick={() => { answer('allowed-once') }}>
             {t('approval.allowOnce')}
           </Button>
         </div>
       </div>
+      <RiskConfirmation
+        open={confirmingFullAccess}
+        title={t('approval.fullAccess.title')}
+        description={t('approval.fullAccess.description')}
+        acknowledgeLabel={t('approval.fullAccess.acknowledge')}
+        cancelLabel={t('approval.fullAccess.cancel')}
+        confirmLabel={t('approval.fullAccess.enable')}
+        acknowledged={acknowledged}
+        disabled={answered}
+        onAcknowledgedChange={setAcknowledged}
+        onCancel={() => {
+          setAcknowledged(false)
+          setConfirmingFullAccess(false)
+        }}
+        onConfirm={() => {
+          setAcknowledged(false)
+          setConfirmingFullAccess(false)
+          answer('allowed-full-access')
+        }}
+      />
     </div>
   )
 }

@@ -111,8 +111,8 @@ describe('parent-only override inheritance snapshot', () => {
         const policyContexts = [...runtimeContexts(parent), ...runtimeContexts(child)]
         expect(policyContexts).toHaveLength(2)
         for (const context of policyContexts) {
-          expect(context).toContain('may modify files under the session workspace')
-          expect(context).toContain('Some platform temporary areas may also be writable.')
+          expect(context).toContain('may modify the session workspace')
+          expect(context).toContain('the platform temp areas, and the configured task-infrastructure roots')
           expect(context).not.toContain('write and edit tools')
           expect(context).not.toContain('one-shot bash commands')
           expect(context).not.toContain('terminal sessions')

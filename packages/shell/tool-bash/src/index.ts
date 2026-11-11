@@ -21,7 +21,7 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { ESCALATION_TARGETS, approveEscalation, canonicalPath, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
-import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
+import { setSandboxMode, type SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-shell'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { processOutcome } from './background.ts'
@@ -228,6 +228,11 @@ export function apply(ctx: Context, config: Config = {}): void {
         callId: exec.callId,
         toolName: 'bash',
         signal: exec.signal,
+        // The session-wide answer: record the durable switch (approveEscalation
+        // calls this only when the human answered 'allowed-full-access').
+        grantFullAccess: () => {
+          if (exec.agent !== undefined) setSandboxMode(exec.agent.session, 'danger-full-access')
+        },
       },
     )
   }

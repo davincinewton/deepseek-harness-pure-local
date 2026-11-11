@@ -17,5 +17,6 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 export interface ApprovalResponsePayload {
   sessionId: SessionId
   approvalId: ApprovalRequestId
-  outcome: 'allowed-once' | 'rejected'
+  /** `'allowed-full-access'` answers only an ask whose frame advertised `allowFullAccess`. */
+  outcome: 'allowed-once' | 'allowed-full-access' | 'rejected'
 }

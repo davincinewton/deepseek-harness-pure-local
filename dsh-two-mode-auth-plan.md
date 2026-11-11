@@ -116,7 +116,10 @@ the third GUI answer button uses the same mode-keyed confirmation.
 > two-mode vocabulary, bwrap deleted, PROBE_SOLO Landlock probe, D2
 > user-facing fail-closed message, windows-acl single-mode runner, presets/
 > client/SDK-facing fixtures retargeted, keyless snapshots refreshed).
-> **Phase 2c (D1 allow-set) in progress.** Phases 3–5 open.
+> **Phase 2c landed** (`60c19c516d` — D1 extra-writable allow-set: policy
+> config + per-OS default table, folded into `writableRoots` (fs fence +
+> Seatbelt), Landlock/runnerCommand grants, windows-acl standing per-root
+> grants + agentless `--extra-write`). Phases 3–5 open.
 > Known pre-existing failures (not from this work): zh_CN bash-denial
 > signature test, shiki lazy-load GUI flake, three browser-provisioning
 > snapshot failures from the worktree's in-progress browser packages.

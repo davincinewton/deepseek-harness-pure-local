@@ -55,7 +55,7 @@ interface BenchOptions {
   modelEntry?: React.ReactNode
   /** Hot text-ref lexicon (injects a minimal slash stub exposing only lexicon()). */
   lexicon?: ReadonlyMap<'/' | '@', readonly string[]>
-  permissions?: { options: { value: string; name: string; description?: string }[]; currentValue: string }
+  permissions?: { options: { value: string; name: string; description?: string; sandbox?: 'workspace-write' | 'danger-full-access' }[]; currentValue: string }
   /** The `imageLimits` projection value (absent = no attachment service). */
   imageLimits?: {
     maxImageBytes: number
@@ -1293,27 +1293,27 @@ describe('command launcher chrome and control seats', () => {
     const command = vi.fn(() => Promise.resolve(true))
     const permissions = {
       options: [
-        { value: 'read-only', name: 'read-only' },
-        { value: 'workspace-write', name: 'workspace-write' },
-        { value: 'danger-full-access', name: 'danger-full-access' },
+        { value: 'ask-mode', name: 'ask-mode' },
+        { value: 'workspace-write', name: 'workspace-write', sandbox: 'workspace-write' as const },
+        { value: 'danger-full-access', name: 'danger-full-access', sandbox: 'danger-full-access' as const },
       ],
-      currentValue: 'read-only',
+      currentValue: 'workspace-write',
     }
     const { view } = bench({ permissions, command })
     const trigger = view.getByLabelText(/^访问模式/) as HTMLButtonElement
     // Title-case display is presentation only; the menu ids stay machine names.
-    expect(trigger.textContent).toBe('Read Only')
+    expect(trigger.textContent).toBe('Workspace Write')
     expect([...trigger.querySelectorAll('svg')]
       .every(icon => icon.closest('[aria-hidden="true"]') !== null)).toBe(true)
     fireEvent.click(trigger)
     const items = view.getAllByRole('menuitem')
-    expect(items.map(o => o.textContent)).toEqual(['Read Only', 'Workspace Write', 'Full access'])
-    fireEvent.click(items[1]!)
+    expect(items.map(o => o.textContent)).toEqual(['Ask Mode', 'Workspace Write', 'Full access'])
+    fireEvent.click(items[0]!)
     // Optimistic pick + disable until admission resolves (command stub resolves true).
     const busy = view.getByLabelText(/^访问模式/) as HTMLButtonElement
-    expect(busy.textContent).toBe('Workspace Write')
+    expect(busy.textContent).toBe('Ask Mode')
     expect(busy.disabled).toBe(true)
-    expect(command).toHaveBeenCalledWith('/permission workspace-write')
+    expect(command).toHaveBeenCalledWith('/permission ask-mode')
     await act(async () => {})
     expect((view.getByLabelText(/^访问模式/) as HTMLButtonElement).disabled).toBe(false)
   })
@@ -1322,8 +1322,8 @@ describe('command launcher chrome and control seats', () => {
     const command = vi.fn(() => Promise.resolve(true))
     const permissions = {
       options: [
-        { value: 'workspace-write', name: 'workspace-write' },
-        { value: 'danger-full-access', name: 'danger-full-access' },
+        { value: 'workspace-write', name: 'workspace-write', sandbox: 'workspace-write' as const },
+        { value: 'danger-full-access', name: 'danger-full-access', sandbox: 'danger-full-access' as const },
       ],
       currentValue: 'workspace-write',
     }
@@ -1351,8 +1351,8 @@ describe('command launcher chrome and control seats', () => {
     const command = vi.fn(() => Promise.resolve(true))
     const permissions = {
       options: [
-        { value: 'workspace-write', name: 'workspace-write' },
-        { value: 'danger-full-access', name: 'danger-full-access' },
+        { value: 'workspace-write', name: 'workspace-write', sandbox: 'workspace-write' as const },
+        { value: 'danger-full-access', name: 'danger-full-access', sandbox: 'danger-full-access' as const },
       ],
       currentValue: 'workspace-write',
     }
@@ -1377,8 +1377,8 @@ describe('command launcher chrome and control seats', () => {
     const command = vi.fn(() => Promise.resolve(true))
     const permissions = {
       options: [
-        { value: 'workspace-write', name: 'workspace-write' },
-        { value: 'danger-full-access', name: 'danger-full-access' },
+        { value: 'workspace-write', name: 'workspace-write', sandbox: 'workspace-write' as const },
+        { value: 'danger-full-access', name: 'danger-full-access', sandbox: 'danger-full-access' as const },
       ],
       currentValue: 'workspace-write',
     }
@@ -1395,8 +1395,8 @@ describe('command launcher chrome and control seats', () => {
     const command = vi.fn(() => Promise.resolve(true))
     const permissions = {
       options: [
-        { value: 'workspace-write', name: 'workspace-write' },
-        { value: 'danger-full-access', name: 'danger-full-access' },
+        { value: 'workspace-write', name: 'workspace-write', sandbox: 'workspace-write' as const },
+        { value: 'danger-full-access', name: 'danger-full-access', sandbox: 'danger-full-access' as const },
       ],
       currentValue: 'workspace-write',
     }

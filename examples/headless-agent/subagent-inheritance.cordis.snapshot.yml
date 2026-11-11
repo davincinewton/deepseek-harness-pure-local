@@ -1,10 +1,9 @@
 # Keyless real-Loader composition for the parent-only override inheritance
-# snapshot. The deployment default stays WIDE (workspace-write) while the
-# seeded parent session carries a session-scoped read-only override; the
-# resumed parent delegates, and only the inheritance capture can confine the
-# child — remove it and the child writes successfully under the deployment
-# default, so this scenario is the assembled-app red/green anchor for the
-# delegation bypass.
+# snapshot. The deployment default is workspace-write (Mode A); the seeded
+# parent session carries a matching session-scoped override, the resumed
+# parent delegates, and the inherited capture is what confines the child's
+# outside-workspace write, so this scenario is the assembled-app red/green
+# anchor for the delegation path.
 
 - id: persistence
   name: '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -16,14 +15,21 @@
 - id: replay
   name: '@deepseek-ai/dsh-llm-replay'
 
-# The confining filesystem stack: the wide deployment default lives on the
-# shared policy home; the seeded parent's read-only override must beat it
-# INSIDE the child for the scenario to deny.
+# The confining filesystem stack: the deployment mode lives on the shared
+# policy home; the seeded parent's override must reach INSIDE the child for
+# the scenario to deny.
 - id: sandbox-policy
   name: '@deepseek-ai/dsh-sandbox-policy'
   config:
     mode: workspace-write
     workspaceRoot: !!js process.cwd()
+
+# The approval seam with no answerer attached (one-shot, no GUI): the child's
+# outside-workspace write prompts, nobody listens, and the ask fails closed as
+# `unavailable` with its asked/decided audit pair — the honest headless shape
+# of the Mode A prompt.
+- id: approval
+  name: '@deepseek-ai/dsh-user-approval'
 
 - id: fs-sandbox
   name: '@deepseek-ai/dsh-fs-sandbox'

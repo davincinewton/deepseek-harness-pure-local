@@ -24,6 +24,8 @@ export interface PermissionDefaultOption {
   id: string
   /** Host-supplied label or a title-cased preset key. */
   label: string
+  /** The sandbox mode selecting this preset writes (from the schema's `extra.sandbox`). */
+  sandbox?: 'workspace-write' | 'danger-full-access'
 }
 
 /** Permission settings-row snapshot. */
@@ -39,7 +41,7 @@ export interface PermissionSettingsState {
 interface ConstChoice {
   type: string
   value?: unknown
-  meta?: { description?: unknown }
+  meta?: { description?: unknown; extra?: { sandbox?: unknown } }
 }
 
 /**
@@ -62,12 +64,15 @@ export function permissionDefaultOf(view: SettingsNamespaceView): {
     const choice = candidate as unknown as ConstChoice
     if (choice.type !== 'const' || typeof choice.value !== 'string') return []
     const described = choice.meta?.description
-    return [{
+    const sandbox = choice.meta?.extra?.sandbox
+    const option: PermissionDefaultOption = {
       id: choice.value,
       label: typeof described === 'string' && described.length > 0
         ? displayPermissionPreset(choice.value, described)
         : displayPermissionPreset(choice.value, choice.value),
-    }]
+    }
+    if (sandbox === 'workspace-write' || sandbox === 'danger-full-access') option.sandbox = sandbox
+    return [option]
   })
   if (options.length === 0 || !options.some(option => option.id === value)) {
     throw new Error('permission settings schema does not advertise its current preset')

@@ -51,6 +51,26 @@ export function canonicalPath(path: string): string {
  * @returns the canonical writable roots; empty under `danger-full-access`
  *   (nothing is fenced there at all).
  */
+/**
+ * Whether one canonicalized path sits under a writable root of `policy` —
+ * the containment the tool layer prompts on BEFORE the fence (the prompt
+ * decision must not wait for a denial). Case-insensitive on win32 like the
+ * fence's containment; the fence remains the enforcement, this is the
+ * prompt trigger.
+ * @param policy - the resolved file-effect policy.
+ * @param path - the canonicalized target path to test.
+ * @returns true when the path is contained (no prompt needed).
+ */
+export function isWithinWritable(policy: SandboxExecutionPolicy, path: string): boolean {
+  if (policy.mode !== 'workspace-write') return true
+  const fold = process.platform === 'win32' ? path.toLowerCase() : path
+  return writableRoots(policy).some((root) => {
+    const base = process.platform === 'win32' ? root.toLowerCase() : root
+    const prefix = base.endsWith('/') || base.endsWith(String.fromCharCode(92)) ? base : `${base}/`
+    return fold === base || fold.startsWith(prefix)
+  })
+}
+
 export function writableRoots(policy: SandboxExecutionPolicy): string[] {
   if (policy.mode !== 'workspace-write') return []
   return [...new Set([

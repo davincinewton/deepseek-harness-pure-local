@@ -23,18 +23,12 @@ interface EditInput {
   replaceAll: boolean
 }
 
-/**
- * The `edit` tool's validated arguments: the base parameters plus the two
- * escalation fields, advertised only under a confining `ctx.fs` (absent from
- * the schema otherwise, so the validator rejects them before `execute`).
- */
+/** The `edit` tool's validated arguments. */
 interface EditToolArgs {
   file_path: string
   old_string: string
   new_string: string
   replace_all?: boolean
-  sandbox_permissions?: string
-  justification?: string
 }
 
 /**
@@ -71,7 +65,7 @@ export function formatEditOutput(displayPath: string, replaceAll: boolean): stri
 /**
  * Register the `edit` tool and its system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
- * @param sandbox - the shared sandbox-escalation API (advertisement, mode stamping, denial mapping).
+ * @param sandbox - the shared sandbox gate (policy stamping, outside-workspace prompt, denial mapping).
  */
 export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void {
   ctx.systemPrompt.section({
@@ -88,7 +82,6 @@ export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void 
       old_string: { type: 'string', required: true, description: 'Literal text to replace. Must match exactly.' },
       new_string: { type: 'string', required: true, description: 'Literal replacement text. Use an empty string to delete the match.' },
       replace_all: { type: 'boolean', description: 'Replace all matches. Defaults to false; when false, old_string must appear exactly once.' },
-      ...sandbox.escalationModes.length > 0 ? sandbox.schemaFields() : {},
     },
     output: {
       schema: {
@@ -113,8 +106,10 @@ export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void 
       const input = parseEditArgs(args)
       // Resolve the per-call sandbox policy (approved mode > session override
       // > backend default, plus the session cwd root) BEFORE anything executes.
-      const sandboxPolicy = await sandbox.resolvePolicy('edit', args, exec)
-      const target = await ctx.fs.resolve(input.filePath, sessionResolveOptions(exec, input.filePath, sandboxPolicy?.workspaceRoot))
+      const standingPolicy = sandbox.standingPolicy(exec)
+      const target = await ctx.fs.resolve(input.filePath, sessionResolveOptions(exec, input.filePath, standingPolicy?.workspaceRoot))
+      // Outside-workspace accesses ask the human BEFORE anything touches disk.
+      const sandboxPolicy = await sandbox.gateMutation('edit', 'modify', target.targetKey, standingPolicy, exec)
       // Single-slot decision: the policy plugin returns { version: vObserved } or
       // throws FS_NOT_OBSERVED; the bare default is undefined (unconditional edit).
       // No stat — the bare default never manufactures a version basis. The intent

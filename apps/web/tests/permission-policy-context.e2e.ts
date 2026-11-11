@@ -28,7 +28,7 @@ const PROMPTS = [
   'Create the relative path policy-neutral.txt in the current workspace containing exactly POLICY_NEUTRAL_OK, verify its contents, then report completion.',
 ] as const
 
-const PRESET_LABELS = ['Read Only', 'Full access', 'Workspace Write'] as const
+const PRESET_LABELS = ['Workspace Write', 'Full access', 'Workspace Write'] as const
 
 function requestSystems(events: readonly SessionEvent[]): string[] {
   return events.flatMap((event) => {
@@ -88,7 +88,7 @@ describe('web e2e: current sandbox policy reaches the model before tools', () =>
     await scaffold?.close()
   })
 
-  it('switches read-only, danger-full-access, and workspace-write through the real GUI command path', async () => {
+  it('switches workspace-write, danger-full-access, and back through the real GUI command path', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-permission-policy-context'))
     if (MODE !== 'record') {
       expect(fixtureUserPrompts(await readFile(FIXTURE, 'utf8'))).toEqual(PROMPTS)
@@ -96,7 +96,7 @@ describe('web e2e: current sandbox policy reaches the model before tools', () =>
 
     const input = page.locator('textarea').first()
     let sessionId: Awaited<ReturnType<WebScaffold['whenTurnSettled']>> | undefined
-    for (const [index, preset] of ['read-only', 'danger-full-access', 'workspace-write'].entries()) {
+    for (const [index, preset] of ['workspace-write', 'danger-full-access', 'workspace-write'].entries()) {
       await input.fill(`/permission ${preset}`)
       await input.press('Enter')
       await page.getByRole('button', { name: `Access mode, current: ${PRESET_LABELS[index]}` })
@@ -109,9 +109,9 @@ describe('web e2e: current sandbox policy reaches the model before tools', () =>
       await expect.poll(() => input.isEnabled(), { timeout: 10_000 }).toBe(true)
     }
 
-    await input.fill('/permission read-only')
+    await input.fill('/permission workspace-write')
     await input.press('Enter')
-    await page.getByRole('button', { name: 'Access mode, current: Read Only' }).waitFor({ timeout: 10_000 })
+    await page.getByRole('button', { name: 'Access mode, current: Workspace Write' }).waitFor({ timeout: 10_000 })
     const settled = scaffold.whenTurnSettled()
     await input.fill(PROMPTS[3])
     await input.press('Enter')
@@ -130,17 +130,17 @@ describe('web e2e: current sandbox policy reaches the model before tools', () =>
 
     const contexts = runtimeContexts(sessionEvents)
     expect(contexts).toHaveLength(4)
-    expect(contexts[0]).toContain('Current DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode.')
-    expect(contexts[0]).toContain('Do not refuse a required modification from this policy alone')
+    expect(contexts[0]).toContain('Current DSH file policy: workspace-write.')
+    expect(contexts[0]).toContain('anything outside them prompts the user (allow once, or full access for the session)')
     expect(contexts[0]).toContain('Approval policy: ask.')
     expect(contexts[1]).toContain('Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.')
     expect(contexts[1]).toContain('Approval prompts are disabled in this session')
 
     if (sessionWorkspace === undefined) throw new Error('permission-policy scenario observed no session workspace')
-    expect(contexts[2]).toContain(`Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(canonicalPath(sessionWorkspace))}. Some platform temporary areas may also be writable.`)
+    expect(contexts[2]).toContain(`Current DSH file policy: workspace-write. File operations enforced by the DSH file sandbox may modify the session workspace ${JSON.stringify(canonicalPath(sessionWorkspace))}`)
     expect(contexts[2]).toContain('Approval policy: ask.')
     expect(contexts[2]).not.toContain('Approval prompts are disabled in this session')
-    expect(contexts[3]).toContain('Current DSH file policy: read-only.')
+    expect(contexts[3]).toContain('Current DSH file policy: workspace-write.')
 
     const answers = assistantTexts(sessionEvents)
     expect(answers.length).toBeGreaterThanOrEqual(4)
@@ -154,11 +154,10 @@ describe('web e2e: current sandbox policy reaches the model before tools', () =>
     expect(calls.length).toBeGreaterThanOrEqual(2)
     const firstCall = calls[0]
     if (firstCall === undefined) throw new Error('neutral policy task produced no tool call')
-    expect(callArgs(firstCall)['sandbox_permissions']).toBeUndefined()
-    expect(calls.some(call => callArgs(call)['sandbox_permissions'] !== undefined)).toBe(true)
-    expect(sessionEvents.some(event => event.type === 'tool/result'
-      && JSON.stringify(event.data).includes('[sandbox: file access denied under read-only mode]'))).toBe(true)
-    expect(sessionEvents.some(event => event.type === 'approval/asked')).toBe(true)
+    // The two-mode vocabulary: workspace writes need neither an escalation
+    // argument nor a prompt, so the whole scenario asks the human nothing.
+    expect(calls.every(call => callArgs(call)['sandbox_permissions'] === undefined)).toBe(true)
+    expect(sessionEvents.some(event => event.type === 'approval/asked')).toBe(false)
     if (sessionWorkspace === undefined) throw new Error('permission-policy scenario observed no session workspace')
     expect(await readFile(join(sessionWorkspace, 'policy-neutral.txt'), 'utf8')).toBe('POLICY_NEUTRAL_OK')
   })

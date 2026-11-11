@@ -6,7 +6,7 @@
  * verbatim texts are pinned once, next to the vocabulary that owns them.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ESCALATION_TARGETS,
   WIDER_MODES,
@@ -69,14 +69,23 @@ describe('approveEscalation', () => {
     agent: {},
     callId: 'call-1',
     toolName: 'bash',
+    grantFullAccess: vi.fn(),
     ...over,
   })
 
-  it('grants: returns the requested mode, asking through the approver with the audit reason', async () => {
-    const seen: { reason?: string }[] = []
-    const granted = await approveEscalation(req(), ingredients({ approver: approver('allowed-once', r => seen.push(r as { reason?: string })) }))
+  it('grants: returns the requested mode, asking through the approver with the audit reason and the session-wide advertisement', async () => {
+    const seen: { reason?: string; allowFullAccess?: boolean }[] = []
+    const granted = await approveEscalation(req(), ingredients({ approver: approver('allowed-once', r => seen.push(r as { reason?: string; allowFullAccess?: boolean })) }))
     expect(granted).toBe('danger-full-access')
     expect(seen[0]?.reason).toBe('escalate sandbox to danger-full-access: the user asked to write outside the workspace')
+    expect(seen[0]?.allowFullAccess).toBe(true)
+  })
+
+  it('the session-wide answer records the durable switch and grants this call', async () => {
+    const grantFullAccess = vi.fn()
+    const granted = await approveEscalation(req(), ingredients({ approver: approver('allowed-full-access'), grantFullAccess }))
+    expect(granted).toBe('danger-full-access')
+    expect(grantFullAccess).toHaveBeenCalledTimes(1)
   })
 
   it('a non-widening request fails closed with its own text and never asks', async () => {

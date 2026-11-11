@@ -1712,6 +1712,9 @@ export class ToolRuntime extends Service {
     })
     switch (outcome) {
       case 'allowed-once': return { decision: { kind: 'allow' }, approvalCancelled: false }
+      case 'allowed-full-access': /* v8 ignore next 2 -- unreachable: this ask never advertises
+         allowFullAccess, so the service normalizes the session-wide answer to 'unavailable'. */
+        return { decision: { kind: 'allow' }, approvalCancelled: false }
       case 'rejected': return {
         decision: { kind: 'deny', reason: `the user rejected tool "${exec.name}"` },
         approvalCancelled: false,

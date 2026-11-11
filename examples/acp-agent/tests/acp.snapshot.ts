@@ -609,8 +609,12 @@ const SCENARIOS: Scenario[] = [
     headerClass: 'sandbox',
     env: { DSH_PERMISSION_MODE: 'workspace-write' },
   },
+  // Mode A prompt flow over ACP: the outside-workspace write raises the
+  // gate, the scripted client answers `reject_once`, and the audited refusal
+  // is the model's whole outcome — the machine channel never sees a
+  // session-wide option.
   {
-    name: 'fs-escalation-approved',
+    name: 'fs-gate-rejected',
     hasModelTurn: true,
     recorded: true,
     headerClass: 'sandbox',

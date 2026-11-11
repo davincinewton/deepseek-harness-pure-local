@@ -759,12 +759,21 @@ describe('read caps are plugin config', () => {
   })
 })
 
-describe('sandbox escalation API (write/edit)', () => {
-  /** A confining fake `ctx.fs`: reports a default mode, records each per-call policy, and can arm a sandbox denial. */
+describe('the outside-workspace gate (read/write/edit)', () => {
+  /** A confining fake `ctx.fs`: realistic canonical target keys, records each per-call policy and read. */
   class SandboxingFakeFs extends FakeFs {
     stamped: (SandboxExecutionPolicy | undefined)[] = []
+    reads: string[] = []
     override get sandboxMode(): SandboxMode {
       return 'workspace-write'
+    }
+    override async resolve(path: string): Promise<FsTarget> {
+      const abs = resolve('/session-project', path)
+      return { targetKey: FsTargetKey(abs), displayPath: abs }
+    }
+    override async readText(target: FsTarget): Promise<string> {
+      this.reads.push(String(target.targetKey))
+      return super.readText(target)
     }
     override async writeText(
       target: FsTarget,
@@ -800,13 +809,14 @@ describe('sandbox escalation API (write/edit)', () => {
     return { ctx, fs: ctx.fs as SandboxingFakeFs }
   }
 
-  /** A fake agent whose session records appends (the approval audit trail), mid-turn, carrying the given events for the fold. */
-  function escalationAgent(events: Array<{ type: string; data?: Record<string, unknown> }> = []): object {
+  /** A fake agent whose session records appends (the approval audit and mode switch), carrying the given events for the fold. */
+  function gateAgent(seed: Array<{ type: string; data?: Record<string, unknown> }> = []): object {
+    const events: Array<{ type: string; data?: Record<string, unknown> }> = [{ type: 'turn/start' }, ...seed]
     return {
-      id: 'agent-fs-esc',
+      id: 'agent-fs-gate',
       session: {
-        header: { version: 0, id: 'sess-fs-esc', createdAt: 0, cwd: '/session-project' },
-        events: [{ type: 'turn/start' }, ...events],
+        header: { version: 0, id: 'sess-fs-gate', createdAt: 0, cwd: '/session-project' },
+        events,
         append: (type: string, data: Record<string, unknown>) => { events.push({ type, data }) },
       },
     }
@@ -814,8 +824,25 @@ describe('sandbox escalation API (write/edit)', () => {
 
   function fsSchema(ctx: Context, name: 'write' | 'edit') {
     const schema = ctx.tools.schemas().find(s => s.name === name)
-    if (!schema) throw new Error(`${name} tool not registered`)
+    if (schema === undefined) throw new Error(`${name} tool not registered`)
     return schema as unknown as { parameters: { properties: Record<string, { enum?: string[] }> } }
+  }
+
+  /** Answers every approval request with `outcome`, recording the requests. */
+  function answerer(ctx: Context, outcome: 'allowed-once' | 'allowed-full-access' | 'rejected') {
+    const seen: { allowFullAccess?: boolean; reason?: string }[] = []
+    ctx.on('approval/request', (req) => {
+      seen.push({
+        ...req.allowFullAccess === undefined ? {} : { allowFullAccess: req.allowFullAccess },
+        ...req.reason === undefined ? {} : { reason: req.reason },
+      })
+      return Promise.resolve(outcome)
+    }, { prepend: true })
+    return seen
+  }
+
+  function gateEvents(agent: object): Array<{ type: string; data?: Record<string, unknown> }> {
+    return (agent as { session: { events: Array<{ type: string; data?: Record<string, unknown> }> } }).session.events
   }
 
   it('fails load when a confining filesystem has no shared sandbox-policy resolver', async () => {
@@ -826,104 +853,114 @@ describe('sandbox escalation API (write/edit)', () => {
     await expect(ctx.plugin(ToolFs)).rejects.toThrow('tool-fs: the mounted filesystem confines but ctx.sandboxPolicy is missing')
   })
 
-  it('advertises no escalation fields under a non-confining backend', async () => {
-    const { ctx } = await setup()
-    expect(ctx.fs.sandboxMode).toBeUndefined()
-    for (const name of ['write', 'edit'] as const) {
-      const props = fsSchema(ctx, name).parameters.properties
-      expect(props['sandbox_permissions']).toBeUndefined()
-      expect(props['justification']).toBeUndefined()
+  it('no fs tool advertises the removed escalation fields, confining or not', async () => {
+    const plain = await setup()
+    const confining = await setupConfining()
+    for (const { ctx } of [plain, confining]) {
+      for (const name of ['write', 'edit'] as const) {
+        const props = fsSchema(ctx, name).parameters.properties
+        expect(props['sandbox_permissions']).toBeUndefined()
+        expect(props['justification']).toBeUndefined()
+      }
     }
   })
 
-  it('advertises the closed target vocabulary on write and edit under a confining backend', async () => {
-    const { ctx } = await setupConfining()
-    for (const name of ['write', 'edit'] as const) {
-      const props = fsSchema(ctx, name).parameters.properties
-      expect(props['sandbox_permissions']?.enum).toEqual(['danger-full-access'])
-      expect(props['justification']).toBeDefined()
-    }
-  })
-
-  it('a plain write stamps the default mode with the calling session root', async () => {
-    const { ctx, fs } = await setupConfining()
-    await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, escalationAgent())
+  it('a contained write stamps the standing mode and asks nobody', async () => {
+    const { ctx, fs } = await setupConfining({ approval: true })
+    const seen = answerer(ctx, 'allowed-once')
+    await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, gateAgent())
     expect(fs.stamped).toMatchObject([{ mode: 'workspace-write', workspaceRoot: resolve('/session-project') }])
+    expect(seen).toEqual([])
   })
 
-  it('a standing session override folds onto the stamp', async () => {
-    const { ctx, fs } = await setupConfining()
-    await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, escalationAgent([{ type: 'sandbox/mode', data: { mode: 'workspace-write' } }]))
-    expect(fs.stamped).toMatchObject([{ mode: 'workspace-write', workspaceRoot: resolve('/session-project') }])
+  it('an outside write prompts BEFORE the mutation; "use once" stamps full access onto the call', async () => {
+    const { ctx, fs } = await setupConfining({ approval: true })
+    const agent = gateAgent()
+    const seen = answerer(ctx, 'allowed-once')
+    await call(ctx, 'write', { file_path: '/outside/x.txt', content: 'x' }, agent)
+    expect(seen).toEqual([{ allowFullAccess: true, reason: expect.stringContaining('/outside/x.txt') }])
+    expect(fs.stamped).toMatchObject([{ mode: 'danger-full-access', workspaceRoot: resolve('/session-project') }])
+    expect(gateEvents(agent).some(event => event.type === 'approval/asked')).toBe(true)
+    expect(gateEvents(agent).some(event => event.type === 'approval/decided')).toBe(true)
   })
 
-  it('a denied write maps to the shared marker plus the escalation hint (isError)', async () => {
+  it('the session-wide answer records the durable sandbox/mode switch and runs the call', async () => {
+    const { ctx, fs } = await setupConfining({ approval: true })
+    const agent = gateAgent()
+    answerer(ctx, 'allowed-full-access')
+    await call(ctx, 'write', { file_path: '/outside/x.txt', content: 'y' }, agent)
+    expect(gateEvents(agent)).toContainEqual({ type: 'sandbox/mode', data: { mode: 'danger-full-access' } })
+    expect(fs.stamped).toMatchObject([{ mode: 'danger-full-access' }])
+  })
+
+  it('a denied prompt refuses the write, never reaches the backend', async () => {
+    const { ctx, fs } = await setupConfining({ approval: true })
+    answerer(ctx, 'rejected')
+    const result = await call(ctx, 'write', { file_path: '/outside/x.txt', content: 'x' }, gateAgent())
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('outside the workspace and permitted roots')
+    expect(fs.stamped).toEqual([])
+  })
+
+  it('an outside write fails closed when no approval service is composed or the call has no agent', async () => {
+    const plain = await setupConfining()
+    const result = await call(plain.ctx, 'write', { file_path: '/outside/x.txt', content: 'x' }, gateAgent())
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('no approval prompt is available')
+
+    const withApproval = await setupConfining({ approval: true })
+    const agentless = await call(withApproval.ctx, 'write', { file_path: '/outside/x.txt', content: 'x' })
+    expect(agentless.isError).toBe(true)
+    expect(text(agentless)).toContain('no approval prompt is available')
+    expect(withApproval.fs.stamped).toEqual([])
+  })
+
+  it('a never-pinned session refuses an outside write without reaching any listener', async () => {
+    const { ctx, fs } = await setupConfining({ approval: true })
+    const asked: unknown[] = []
+    ctx.on('approval/request', () => { asked.push(1); return Promise.resolve('allowed-once' as const) }, { prepend: true })
+    const result = await call(ctx, 'write', { file_path: '/outside/x.txt', content: 'x' }, gateAgent([{ type: 'approval/policy', data: { policy: 'never' } }]))
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('outside the workspace and permitted roots')
+    expect(asked).toEqual([])
+    expect(fs.stamped).toEqual([])
+  })
+
+  it('a contained read asks nobody; an outside read prompts before content, refusal stops it', async () => {
+    const { ctx, fs } = await setupConfining({ approval: true })
+    fs.files.set(FsTargetKey('/outside/x.txt'), 'secret')
+    const seen = answerer(ctx, 'rejected')
+    await call(ctx, 'read', { file_path: 'a.txt' }, gateAgent())
+    expect(seen).toEqual([])
+    const refused = await call(ctx, 'read', { file_path: '/outside/x.txt' }, gateAgent())
+    expect(refused.isError).toBe(true)
+    expect(text(refused)).toContain('cannot read')
+    expect(seen).toHaveLength(1)
+    expect(fs.reads).not.toContain('/outside/x.txt')
+
+    const allowed = await setupConfining({ approval: true })
+    allowed.fs.files.set(FsTargetKey('/outside/x.txt'), 'secret')
+    answerer(allowed.ctx, 'allowed-once')
+    const ok = await call(allowed.ctx, 'read', { file_path: '/outside/x.txt' }, gateAgent())
+    expect(ok.isError).toBeFalsy()
+    expect(allowed.fs.reads).toContain('/outside/x.txt')
+  })
+
+  it('a provider denial maps to the shared marker with no escalation hint', async () => {
     const { ctx, fs } = await setupConfining()
     fs.rejectWith = new FsError('denied', 'FS_SANDBOX_DENIED')
-    const result = await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, escalationAgent())
+    const result = await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, gateAgent())
     expect(result.isError).toBe(true)
     expect(text(result)).toContain('[sandbox: file access denied under workspace-write mode]')
-    expect(text(result)).toContain('retry this exact operation once with sandbox_permissions')
+    expect(text(result)).not.toContain('sandbox_permissions')
   })
 
   it('a non-FS_SANDBOX_DENIED provider error passes through unchanged', async () => {
     const { ctx, fs } = await setupConfining()
     fs.rejectWith = new FsError('boom', 'FS_IO_ERROR')
-    const result = await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, escalationAgent())
+    const result = await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, gateAgent())
     expect(result.isError).toBe(true)
     expect(text(result)).toContain('boom')
     expect(text(result)).not.toContain('[sandbox:')
-  })
-
-  it('an approved escalation stamps the granted mode onto that write', async () => {
-    const { ctx, fs } = await setupConfining({ approval: true })
-    ctx.on('approval/request', () => Promise.resolve('allowed-once' as const))
-    // Pass a signal so the escalation ask forwards it to the approval request
-    // (the request rides the tool-execution abort signal).
-    await ctx.tools.execute({
-      callId: CallId('call-fs-esc-grant'),
-      name: 'write',
-      arguments: { file_path: 'a.txt', content: 'x', sandbox_permissions: 'danger-full-access', justification: 'the test needs it' },
-      agent: escalationAgent() as never,
-      signal: new AbortController().signal,
-    })
-    expect(fs.stamped).toMatchObject([{ mode: 'danger-full-access', workspaceRoot: resolve('/session-project') }])
-  })
-
-  it('a rejected escalation fails closed with its own text and never mutates', async () => {
-    const { ctx, fs } = await setupConfining({ approval: true })
-    ctx.on('approval/request', () => Promise.resolve('rejected' as const))
-    const result = await call(ctx, 'edit', { file_path: 'a.txt', old_string: 'x', new_string: 'y', sandbox_permissions: 'danger-full-access', justification: 'the test needs it' }, escalationAgent())
-    expect(result.isError).toBe(true)
-    expect(text(result)).toContain('the user rejected escalating this operation to "danger-full-access"')
-    expect(fs.stamped).toEqual([])
-  })
-
-  it('escalation without an approval service fails closed', async () => {
-    const { ctx } = await setupConfining()
-    const result = await call(ctx, 'write', { file_path: 'a.txt', content: 'x', sandbox_permissions: 'danger-full-access', justification: 'why' }, escalationAgent())
-    expect(result.isError).toBe(true)
-    expect(text(result)).toContain('no approval service is composed')
-  })
-
-  it('escalation with an approval service but no agent fails closed', async () => {
-    const { ctx } = await setupConfining({ approval: true })
-    const result = await call(ctx, 'write', { file_path: 'a.txt', content: 'x', sandbox_permissions: 'danger-full-access', justification: 'why' })
-    expect(result.isError).toBe(true)
-    expect(text(result)).toContain('no agent to route it through')
-  })
-
-  it('rejects the escalation argument pairing (one field without the other)', async () => {
-    const { ctx } = await setupConfining()
-    const missing = await call(ctx, 'write', { file_path: 'a.txt', content: 'x', sandbox_permissions: 'danger-full-access' }, escalationAgent())
-    expect(missing.isError).toBe(true)
-    expect(text(missing)).toContain('sandbox_permissions requires a justification')
-  })
-
-  it('sandbox_permissions under a non-confining backend fails closed (unadvertised field still reaches execute)', async () => {
-    const { ctx } = await setup()
-    const result = await call(ctx, 'write', { file_path: 'a.txt', content: 'x', sandbox_permissions: 'danger-full-access', justification: 'why' }, escalationAgent())
-    expect(result.isError).toBe(true)
-    expect(text(result)).toContain('not available in this composition')
   })
 })

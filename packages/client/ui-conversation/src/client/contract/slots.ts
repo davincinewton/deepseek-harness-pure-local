@@ -630,13 +630,19 @@ export class PendingApproval {
     return this.wait.payload.callId
   }
 
+  /** Whether the asker honors the session-wide answer (third button visibility). */
+  get allowFullAccess(): boolean {
+    return this.wait.payload.allowFullAccess === true
+  }
+
   /**
    * Deliver the user's decision; a rejected carrier receipt throws. Panel
    * removal stays frame-driven: the broadcast `approval/resolved` settles the
    * wait and drops it from the pending list.
-   * @param outcome - the only two client-answerable outcomes.
+   * @param outcome - the client-answerable outcomes (`allowed-full-access`
+   *   only on an ask whose frame advertised it).
    */
-  async answer(outcome: 'allowed-once' | 'rejected'): Promise<void> {
+  async answer(outcome: 'allowed-once' | 'allowed-full-access' | 'rejected'): Promise<void> {
     const receipt = await this.wait.respond({
       ok: true,
       value: { sessionId: this.wait.sessionId, approvalId: this.wait.payload.approvalId, outcome },

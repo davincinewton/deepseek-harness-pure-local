@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { buildWindow, formatReadOutput, langFromPath, readMetaFromMeta } from './read-render.ts'
 import { resolveRegularReadTarget } from './read-target.ts'
+import type { FsSandboxController } from './sandbox.ts'
 
 /** Default and maximum number of lines returned by one `read` call (the `readLimit` config). */
 export const READ_LIMIT = 2000
@@ -65,8 +66,9 @@ export function parseReadArgs(args: { file_path: string; offset?: number; limit?
  * Register the `read` tool and its system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
  * @param caps - the deployment's resolved read caps (plugin config after defaulting).
+ * @param sandbox - the shared sandbox gate; Mode A prompts before reading outside the workspace.
  */
-export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
+export function applyReadTool(ctx: Context, caps: ReadToolCaps, sandbox: FsSandboxController): void {
   ctx.systemPrompt.section({
     name: 'tool:read',
     order: 100,
@@ -138,6 +140,9 @@ export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
       // One stat: absence observation OR type check + size routing + present version.
       // A concurrent write can only make a later guarded mutation fail stale and require reread.
       const { target, info } = await resolveRegularReadTarget(ctx, exec, input.filePath)
+      // Mode A prompts BEFORE content leaves the disk for reads outside the
+      // workspace and permitted roots; refusal throws, an allow continues.
+      await sandbox.gateRead('read', target.targetKey, exec)
 
       // Stream when the file is large OR size is unknown, so a size-less backend
       // never buffers an arbitrarily large file.

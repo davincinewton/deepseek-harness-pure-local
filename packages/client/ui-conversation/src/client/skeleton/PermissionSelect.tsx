@@ -99,7 +99,9 @@ export function PermissionSelect({ value, locked, command, t }: PermissionSelect
   const choose = (id: string): void => {
     setOpen(false)
     if (id === value.currentValue) return
-    if (id === FULL_ACCESS) {
+    // Confirmation keys on what the option WRITES (full-access sandbox), not
+    // on its name — any preset widening to full access is gated.
+    if (value.options.find(option => option.value === id)?.sandbox === FULL_ACCESS) {
       setAcknowledged(false)
       setConfirmation(id)
       return

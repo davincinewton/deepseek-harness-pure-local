@@ -79,7 +79,7 @@ export { ApprovalRequestId } from './types.ts'
 export type { ApprovalOutcome } from './types.ts'
 
 /** Every {@link ApprovalOutcome}, for runtime normalization of answerer returns. */
-const OUTCOMES: readonly ApprovalOutcome[] = ['allowed-once', 'rejected', 'cancelled', 'unavailable']
+const OUTCOMES: readonly ApprovalOutcome[] = ['allowed-once', 'allowed-full-access', 'rejected', 'cancelled', 'unavailable']
 
 /**
  * A session's approval policy — what happens to an {@link ApprovalService}
@@ -171,6 +171,14 @@ export interface ApprovalRequest {
    * immediately and a late answer from a still-pending answerer is discarded.
    */
   readonly signal?: AbortSignal
+  /**
+   * The asker can honor the session-wide answer: an answerer may answer
+   * `'allowed-full-access'` and the asker then switches the session's
+   * sandbox mode to full access durably. Asks that do not advertise it
+   * normalize that outcome to `'unavailable'` (a switch with no owner is a
+   * fail-closed answer).
+   */
+  readonly allowFullAccess?: boolean
 }
 
 /** Plugin config. All optional — `static Config` supplies the defaults. */
@@ -250,7 +258,8 @@ export class ApprovalService extends Service {
    * authoritative append cannot reject the request or suppress its matching
    * audit event.
    * @param req - the pending decision (agent, tool identity, reason, signal).
-   * @returns the closed outcome; `'allowed-once'` is the only grant.
+   * @returns the closed outcome; `'allowed-once'` grants one call,
+   *   `'allowed-full-access'` (only when advertised) widens the session.
    * @throws when no turn is open or either audit event fails before the session
    *   append commit point.
    */
@@ -322,7 +331,9 @@ export class ApprovalService extends Service {
     ).then(
       // Normalize a rogue (non-vocabulary) answerer return to the fail-closed
       // outcome instead of leaking it into callers' closed-union switches.
-      outcome => OUTCOMES.includes(outcome) ? outcome : 'unavailable',
+      outcome => OUTCOMES.includes(outcome) && !(outcome === 'allowed-full-access' && req.allowFullAccess !== true)
+        ? outcome
+        : 'unavailable',
       // A throwing answerer must fail the QUESTION closed, not the caller's
       // tool call open — the seam contains its callbacks.
       () => 'unavailable',

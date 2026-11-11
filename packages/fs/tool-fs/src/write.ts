@@ -42,22 +42,16 @@ ${verb} file
 </content>`
 }
 
-/**
- * The `write` tool's validated arguments: the base parameters plus the
- * two escalation fields, advertised only under a confining `ctx.fs` (absent
- * from the schema otherwise, so the validator rejects them before `execute`).
- */
+/** The `write` tool's validated arguments. */
 interface WriteToolArgs {
   file_path: string
   content: string
-  sandbox_permissions?: string
-  justification?: string
 }
 
 /**
  * Register the `write` tool and its system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
- * @param sandbox - the shared sandbox-escalation API (advertisement, mode stamping, denial mapping).
+ * @param sandbox - the shared sandbox gate (policy stamping, outside-workspace prompt, denial mapping).
  */
 export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void {
   ctx.systemPrompt.section({
@@ -72,7 +66,6 @@ export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void
     parameters: {
       file_path: { type: 'string', required: true, description: 'Path to write, resolved by the filesystem backend.' },
       content: { type: 'string', required: true, description: 'Full UTF-8 text content to write.' },
-      ...sandbox.escalationModes.length > 0 ? sandbox.schemaFields() : {},
     },
     output: {
       schema: {
@@ -101,11 +94,10 @@ export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void
     },
     async execute(args: WriteToolArgs, exec) {
       const input = parseWriteArgs(args)
-      // Resolve the per-call sandbox policy (approved mode > session override
-      // > backend default, plus the session cwd root) BEFORE anything executes;
-      // an escalating call throws its distinct text on any non-grant.
-      const sandboxPolicy = await sandbox.resolvePolicy('write', args, exec)
-      const target = await ctx.fs.resolve(input.filePath, sessionResolveOptions(exec, input.filePath, sandboxPolicy?.workspaceRoot))
+      const standingPolicy = sandbox.standingPolicy(exec)
+      const target = await ctx.fs.resolve(input.filePath, sessionResolveOptions(exec, input.filePath, standingPolicy?.workspaceRoot))
+      // Outside-workspace accesses ask the human BEFORE anything touches disk.
+      const sandboxPolicy = await sandbox.gateMutation('write', 'modify', target.targetKey, standingPolicy, exec)
       // Single-slot decision: the policy plugin produces createIfAbsent/
       // replaceIfVersion; the bare default is undefined (unconditional). No stat.
       const intent = await ctx.waterfall('fs/write-intent', target, exec, () => undefined)

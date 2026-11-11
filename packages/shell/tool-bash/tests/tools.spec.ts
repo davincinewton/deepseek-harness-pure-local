@@ -658,6 +658,19 @@ describe('sandbox escalation through the generic task producer', () => {
     expect(bash.modes).toEqual(['danger-full-access', 'danger-full-access'])
   })
 
+  it('the session-wide answer records the durable switch and runs the call unconfined', async () => {
+    const { ctx, bash } = await setupSandboxed(true)
+    ctx.on('approval/request', () => Promise.resolve<ApprovalOutcome>('allowed-full-access'))
+    const agent = sandboxAgent(undefined, ctx)
+    ctx.agents.register(agent)
+    const result = await call(ctx, 'bash', escalate, agent)
+    expect(result.isError).toBeFalsy()
+    expect(bash.modes).toEqual(['danger-full-access'])
+    const events = (agent.session as unknown as { events: Array<{ type: string; data?: Record<string, unknown> }> }).events
+    expect(events.filter(event => event.type === 'sandbox/mode'))
+      .toEqual([{ type: 'sandbox/mode', data: { mode: 'danger-full-access' } }])
+  })
+
   it('does not publish detached work when cancellation follows the escalation grant', async () => {
     const { ctx, bash } = await setupSandboxed(true)
     const controller = new AbortController()

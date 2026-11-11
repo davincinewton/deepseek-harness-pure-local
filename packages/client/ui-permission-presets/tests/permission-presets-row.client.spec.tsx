@@ -12,9 +12,9 @@ afterEach(cleanup)
 const SCHEMA = {
   uid: 5,
   refs: {
-    1: { type: 'const', value: 'read-only' },
-    2: { type: 'const', value: 'workspace-write' },
-    3: { type: 'const', value: 'danger-full-access' },
+    1: { type: 'const', value: 'ask-mode' },
+    2: { type: 'const', meta: { extra: { sandbox: 'workspace-write' } }, value: 'workspace-write' },
+    3: { type: 'const', meta: { extra: { sandbox: 'danger-full-access' } }, value: 'danger-full-access' },
     4: { type: 'union', list: [1, 2, 3] },
     5: { type: 'object', dict: { defaultPreset: 4 } },
   },
@@ -25,7 +25,7 @@ function view(defaultPreset: string, revision = 0): SettingsNamespaceView {
     ns: 'permission',
     schema: SCHEMA,
     value: { defaultPreset },
-    base: { defaultPreset: 'read-only' },
+    base: { defaultPreset: 'ask-mode' },
     applies: 'live',
     secrets: [],
     revision,
@@ -60,12 +60,12 @@ describe('PermissionRow', () => {
     const mutate = vi.fn(() => Promise.resolve(ok(view('workspace-write', 1))))
     const controller = new PermissionPresetSettingsController({
       settings: {
-        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('read-only')] })),
+        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('ask-mode')] })),
         mutate,
       } as never,
     })
     mount(controller)
-    const button = await screen.findByRole('button', { name: 'Read Only' })
+    const button = await screen.findByRole('button', { name: 'Ask Mode' })
     expect(button.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
@@ -75,7 +75,7 @@ describe('PermissionRow', () => {
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(button)
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Read Only' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Ask Mode' }))
     expect(mutate).not.toHaveBeenCalled()
     fireEvent.click(button)
     fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace Write' }))
@@ -87,17 +87,17 @@ describe('PermissionRow', () => {
     const mutate = vi.fn(() => Promise.resolve(ok(view('danger-full-access', 1))))
     const controller = new PermissionPresetSettingsController({
       settings: {
-        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('read-only')] })),
+        describe: () => Promise.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('ask-mode')] })),
         mutate,
       } as never,
     })
     mount(controller)
-    fireEvent.click(await screen.findByRole('button', { name: 'Read Only' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask Mode' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Full access' }))
     expect(mutate).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('dialog', { name: 'Enable Full access?' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Read Only' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Mode' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Full access' }))
     const dialog = screen.getByRole('dialog', { name: 'Enable Full access?' })
     const enable = screen.getByRole('button', { name: 'Enable Full access' })
@@ -121,12 +121,12 @@ describe('PermissionRow', () => {
 
     const readonly = new PermissionPresetSettingsController({
       settings: {
-        describe: () => Promise.resolve(ok({ writable: false, hasDocument: false, namespaces: [view('read-only')] })),
+        describe: () => Promise.resolve(ok({ writable: false, hasDocument: false, namespaces: [view('ask-mode')] })),
         mutate: vi.fn(),
       } as never,
     })
     mount(readonly)
-    expect((await screen.findByRole('button', { name: 'Read Only' })).hasAttribute('disabled')).toBe(true)
+    expect((await screen.findByRole('button', { name: 'Ask Mode' })).hasAttribute('disabled')).toBe(true)
   })
 
   it('shows loading and a contained write error', async () => {
@@ -148,8 +148,8 @@ describe('PermissionRow', () => {
     })
     mount(controller)
     expect((await screen.findByRole('button', { name: 'Loading' })).hasAttribute('disabled')).toBe(true)
-    describe.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('read-only')] }))
-    const button = await screen.findByRole('button', { name: 'Read Only' })
+    describe.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('ask-mode')] }))
+    const button = await screen.findByRole('button', { name: 'Ask Mode' })
     fireEvent.click(button)
     fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace Write' }))
     expect((await screen.findByRole('alert')).textContent).toBe('changed elsewhere')

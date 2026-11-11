@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -14,6 +14,7 @@ import {
   type LaunchedAcpTestAgent,
 } from '@deepseek-ai/dsh-acp-snapshot'
 import { cleanupAcpExampleTest } from './cleanup.ts'
+import { launcherPath } from '@deepseek-ai/node-addon-landlock-run'
 
 /**
  * The default ACP composition (`cordis.yml`) end to end.
@@ -25,11 +26,12 @@ import { cleanupAcpExampleTest } from './cleanup.ts'
  * model nor a sandbox runner is ever exercised.
  *
  * With-key escalation flow (self-skips without DEEPSEEK_API_KEY or a usable
- * platform runner): a scripted ACP client supplies machine policy. The subprocess
- * starts read-only, its first real bash write is denied, the model retries with
- * `sandbox_permissions` + `justification`, and the bridge prompts THIS client
- * over `session/request_permission`. An approved workspace-write retry must
- * then land ON DISK (world-verified).
+ * platform runner): a scripted ACP client supplies machine policy. The
+ * subprocess runs Mode A (workspace-write), its first real bash write OUTSIDE
+ * the workspace is kernel-denied, the model retries with `sandbox_permissions`
+ * + `justification`, and the bridge prompts THIS client over
+ * `session/request_permission`. An approved full-access retry must then land
+ * ON DISK (world-verified).
  */
 
 const AGENT: AgentUnderTest = {
@@ -38,19 +40,17 @@ const AGENT: AgentUnderTest = {
   tsconfigPath: fileURLToPath(new URL('../../../tsconfig.json', import.meta.url)),
 }
 
-// A usable confining runner, probed the same way the executor suites do:
-// bwrap on Linux, Seatbelt's sandbox-exec on macOS. Without one the strict
-// attempt would fail closed (SANDBOX_UNAVAILABLE) instead of producing the
-// denial this flow starts from.
-const hasBwrap = spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent', '--', 'true'], {
-  timeout: 5_000,
-  stdio: 'ignore',
-}).status === 0
+// A usable confining runner, probed the same way the executor suites do: the
+// Landlock launcher on Linux, Seatbelt's sandbox-exec on macOS. Without one
+// the strict attempt would fail closed (SANDBOX_UNAVAILABLE) instead of
+// producing the denial this flow starts from.
+const hasLandlock = process.platform === 'linux'
+  && spawnSync(launcherPath(), ['--probe'], { timeout: 5_000, stdio: 'ignore' }).status === 0
 const hasSeatbelt = process.platform === 'darwin' && spawnSync('sandbox-exec', ['-p', '(version 1)(allow default)', 'true'], {
   timeout: 5_000,
   stdio: 'ignore',
 }).status === 0
-const hasRunner = hasBwrap || hasSeatbelt
+const hasRunner = hasLandlock || hasSeatbelt
 
 interface Spawned extends LaunchedAcpTestAgent {
   permissionRequests: RequestPermissionRequest[]
@@ -60,7 +60,7 @@ interface Spawned extends LaunchedAcpTestAgent {
 function launchExampleAcpAgent(
   cwd: string,
   answer: 'allow-once' | 'reject-once',
-  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access',
+  sandboxMode?: 'workspace-write' | 'danger-full-access',
 ): Spawned {
   const permissionRequests: RequestPermissionRequest[] = []
   const launched = launchAcpTestAgent({
@@ -85,8 +85,9 @@ function launchExampleAcpAgent(
 
 function escalationPrompt(path: string, content: string): string {
   return `Create ${path} containing exactly ${JSON.stringify(content)} using bash, not filesystem tools. `
+    + 'The path is outside the workspace, so the first attempt may be blocked. '
     + 'First try the command without sandbox_permissions. If the sandbox denies it, retry that exact command once '
-    + 'with sandbox_permissions set to workspace-write and a one-sentence justification.'
+    + 'with sandbox_permissions set to danger-full-access and a one-sentence justification.'
 }
 
 let spawned: Spawned | undefined
@@ -97,6 +98,12 @@ afterEach(async () => {
   const ownedWorkdir = workdir
   spawned = undefined
   workdir = undefined
+  if (ownedWorkdir !== undefined) {
+    // The escalation targets sit OUTSIDE the disposable workdir (its parent),
+    // so their removal is owned here, not by the workdir cleanup.
+    await rm(join(ownedWorkdir, '..', 'acp-escalated.txt'), { force: true })
+    await rm(join(ownedWorkdir, '..', 'acp-refused.txt'), { force: true })
+  }
   await cleanupAcpExampleTest(ownedSpawned, ownedWorkdir)
 })
 
@@ -121,8 +128,11 @@ describe('default sandbox composition keyless smoke (real cordis.yml via the Loa
 
 describe.skipIf(!process.env.DEEPSEEK_API_KEY || !hasRunner)('default sandbox composition e2e: the live approval loop', () => {
   it('denial → model escalation → machine allow-once → the retried write lands on disk', async () => {
-    workdir = await mkdtemp(join(tmpdir(), 'sandbox-acp-e2e-'))
-    spawned = launchExampleAcpAgent(workdir, 'allow-once', 'read-only')
+    // The workspace lives under HOME so the escalation TARGET (a sibling
+    // path) escapes Mode A's temp roots too — under tmpdir the kernel would
+    // allow the write and the flow would never reach a denial.
+    workdir = await mkdtemp(join(homedir(), 'sandbox-acp-e2e-'))
+    spawned = launchExampleAcpAgent(workdir, 'allow-once', 'workspace-write')
     const { client, permissionRequests, updates } = spawned
 
     await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
@@ -131,14 +141,14 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || !hasRunner)('default sandbox co
       sessionId,
       prompt: [{
         type: 'text',
-        text: `${escalationPrompt(join(workdir, 'escalated.txt'), 'ACP_ESCALATION_OK')} Then stop.`,
+        text: `${escalationPrompt(join(workdir, '..', 'acp-escalated.txt'), 'ACP_ESCALATION_OK')} Then stop.`,
       }],
     })
     expect(['end_turn', 'max_tokens']).toContain(res.stopReason)
     expect(updates.every(update => update.sessionUpdate === 'agent_message_chunk')).toBe(true)
 
     // The WORLD: the approved escalated retry landed the write.
-    const proof = await readFile(join(workdir, 'escalated.txt'), 'utf8')
+    const proof = await readFile(join(workdir, '..', 'acp-escalated.txt'), 'utf8')
     expect(proof).toContain('ACP_ESCALATION_OK')
 
     // The CHANNEL: the grant came through a real session/request_permission
@@ -153,8 +163,9 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || !hasRunner)('default sandbox co
   }, 240_000)
 
   it('a rejected escalation stays denied: no write lands, the turn still ends', async () => {
-    workdir = await mkdtemp(join(tmpdir(), 'sandbox-acp-e2e-'))
-    spawned = launchExampleAcpAgent(workdir, 'reject-once', 'read-only')
+    // Outside-workspace target (see the approved-flow test for why HOME).
+    workdir = await mkdtemp(join(homedir(), 'sandbox-acp-e2e-'))
+    spawned = launchExampleAcpAgent(workdir, 'reject-once', 'workspace-write')
     const { client, permissionRequests, updates } = spawned
 
     await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
@@ -163,14 +174,14 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || !hasRunner)('default sandbox co
       sessionId,
       prompt: [{
         type: 'text',
-        text: `${escalationPrompt(join(workdir, 'refused.txt'), 'NO')} If approval is rejected, stop and say so.`,
+        text: `${escalationPrompt(join(workdir, '..', 'acp-refused.txt'), 'NO')} If approval is rejected, stop and say so.`,
       }],
     })
     expect(['end_turn', 'max_tokens']).toContain(res.stopReason)
     expect(updates.every(update => update.sessionUpdate === 'agent_message_chunk')).toBe(true)
 
     // The WORLD: rejected means the file never appeared.
-    await expect(readFile(join(workdir, 'refused.txt'), 'utf8')).rejects.toThrow()
+    await expect(readFile(join(workdir, '..', 'acp-refused.txt'), 'utf8')).rejects.toThrow()
     // And the rejection flowed through the machine-policy channel.
     expect(permissionRequests.length).toBeGreaterThan(0)
   }, 240_000)

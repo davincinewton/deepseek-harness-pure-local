@@ -41,7 +41,9 @@ export type PermissionRowProps =
 export function PermissionRow({ load, select, usePermission, t }: PermissionRowProps) {
   const state = usePermission(snapshot => snapshot)
   const [open, setOpen] = useState(false)
-  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
+  // The preset awaiting confirmation (any preset whose sandbox widens to full
+  // access, whatever it is named), or null when no dialog is open.
+  const [pendingFullAccess, setPendingFullAccess] = useState<string | null>(null)
   const [acknowledged, setAcknowledged] = useState(false)
 
   useEffect(() => {
@@ -52,12 +54,12 @@ export function PermissionRow({ load, select, usePermission, t }: PermissionRowP
     if (state.writable && state.status !== 'unavailable') return
     setOpen(false)
     setAcknowledged(false)
-    setConfirmingFullAccess(false)
+    setPendingFullAccess(null)
   }, [state.status, state.writable])
 
   if (state.status === 'unavailable') return null
   const selected = state.options.find(option => option.id === state.currentValue)
-  const busy = state.status === 'loading' || state.status === 'saving' || confirmingFullAccess
+  const busy = state.status === 'loading' || state.status === 'saving' || pendingFullAccess !== null
   const label = selected?.label
     ?? (busy ? t('loading') : t('unavailable'))
   const description: string = state.error ?? t('description')
@@ -77,9 +79,11 @@ export function PermissionRow({ load, select, usePermission, t }: PermissionRowP
           onSelect={(id) => {
             setOpen(false)
             if (id === state.currentValue) return
-            if (id === FULL_ACCESS_PRESET) {
+            // Confirmation keys on what the option WRITES (full-access sandbox),
+            // not on its name — any preset widening to full access is gated.
+            if (state.options.find(option => option.id === id)?.sandbox === FULL_ACCESS_PRESET) {
               setAcknowledged(false)
-              setConfirmingFullAccess(true)
+              setPendingFullAccess(id)
               return
             }
             void select(id)
@@ -102,7 +106,7 @@ export function PermissionRow({ load, select, usePermission, t }: PermissionRowP
         />
       </div>
       <RiskConfirmation
-        open={confirmingFullAccess}
+        open={pendingFullAccess !== null}
         title={t('confirm.title')}
         description={t('confirm.description')}
         acknowledgeLabel={t('confirm.acknowledge')}
@@ -113,12 +117,13 @@ export function PermissionRow({ load, select, usePermission, t }: PermissionRowP
         onAcknowledgedChange={setAcknowledged}
         onCancel={() => {
           setAcknowledged(false)
-          setConfirmingFullAccess(false)
+          setPendingFullAccess(null)
         }}
         onConfirm={() => {
+          const id = pendingFullAccess
           setAcknowledged(false)
-          setConfirmingFullAccess(false)
-          void select(FULL_ACCESS_PRESET)
+          setPendingFullAccess(null)
+          if (id !== null) void select(id)
         }}
       />
     </>

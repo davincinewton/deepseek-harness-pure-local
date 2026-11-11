@@ -25,9 +25,9 @@ const sid = (k: string): SessionId => k as SessionId
 
 const SELECT: PermissionSelect = {
   options: [
-    { value: 'read-only', name: 'read-only', description: 'Reads only.' },
-    { value: 'workspace-write', name: 'workspace-write' },
-    { value: 'danger-full-access', name: 'danger-full-access' },
+    { value: 'ask-mode', name: 'ask-mode', description: 'Workspace files only.' },
+    { value: 'workspace-write', name: 'workspace-write', sandbox: 'workspace-write' },
+    { value: 'danger-full-access', name: 'danger-full-access', sandbox: 'danger-full-access' },
   ],
   currentValue: 'workspace-write',
 }
@@ -120,14 +120,14 @@ describe('ui-permission browser plugin', () => {
     b.values.set(sid('s1'), { ...SELECT, options: [...SELECT.options, { value: 'custom', name: 'Custom' }], currentValue: 'custom' })
     expect(c.available(proj)).toBe(true)
     const options = await c.ui.options(proj, new AbortController().signal)
-    expect(options.map(option => option.id)).toEqual(['read-only', 'workspace-write', 'danger-full-access'])
+    expect(options.map(option => option.id)).toEqual(['ask-mode', 'workspace-write', 'danger-full-access'])
     expect(options.every(option => option.active !== true)).toBe(true)
     b.values.set(sid('s1'), SELECT)
     const again = await c.ui.options(proj, new AbortController().signal)
     expect(again.find(option => option.id === 'workspace-write')?.active).toBe(true)
-    expect(again.find(option => option.id === 'read-only')?.detail).toBe('Reads only.')
+    expect(again.find(option => option.id === 'ask-mode')?.detail).toBe('Workspace files only.')
     // Kebab-case names title-case; non-kebab host-configured names pass through.
-    expect(again.map(option => option.label)).toEqual(['Read Only', 'Workspace Write', 'Full access'])
+    expect(again.map(option => option.label)).toEqual(['Ask Mode', 'Workspace Write', 'Full access'])
     expect(again.find(option => option.id === 'danger-full-access')?.confirmation).toEqual({
       title: 'Enable Full access?',
       description: accessEn['confirm.description'],

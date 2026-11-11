@@ -89,7 +89,7 @@ export function escalationHintMarker(subject: string): string {
  * to the approval seam's `ApprovalOutcome` so an `ApprovalService.request`
  * return is assignable without this package importing it.
  */
-export type EscalationOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+export type EscalationOutcome = 'allowed-once' | 'allowed-full-access' | 'rejected' | 'cancelled' | 'unavailable'
 
 /**
  * The minimal approval-request shape {@link approveEscalation} needs —
@@ -104,7 +104,14 @@ export interface EscalationApprover<A = object, C = string> {
    * @param req - the audit-self-contained request (agent, tool, call id, reason, optional signal).
    * @returns the human's decision as a closed {@link EscalationOutcome}.
    */
-  request(req: { agent: A; toolName: string; callId: C; reason: string; signal?: AbortSignal }): Promise<EscalationOutcome>
+  request(req: {
+    agent: A
+    toolName: string
+    callId: C
+    reason: string
+    signal?: AbortSignal
+    allowFullAccess?: boolean
+  }): Promise<EscalationOutcome>
 }
 
 /**
@@ -125,6 +132,14 @@ export interface EscalationApproval<A = object, C = string> {
   toolName: string
   /** The tool-execution abort signal the approval request rides, when present. */
   signal?: AbortSignal
+  /**
+   * Record the human's session-wide answer: switch the calling session's
+   * sandbox mode to full access durably (the tool layer closes over the
+   * session's `setSandboxMode`). Called only when the answerer answered
+   * `'allowed-full-access'`; the escalated call still runs under the granted
+   * mode exactly like `'allowed-once'`.
+   */
+  grantFullAccess: () => void
 }
 
 /** One escalation request, as {@link approveEscalation} judges it. */
@@ -175,11 +190,16 @@ export async function approveEscalation<A, C>(request: EscalationRequest, approv
     callId: approval.callId,
     reason: `escalate sandbox to ${mode}: ${justification}`,
     ...approval.signal ? { signal: approval.signal } : {},
+    // The three answers: Deny / Use once / Full access (session).
+    allowFullAccess: true,
   })
   switch (outcome) {
     // The schema enum already pinned `mode` to the closed target vocabulary;
     // the check above proved it is strictly wider.
     case 'allowed-once': return mode as SandboxMode
+    case 'allowed-full-access':
+      approval.grantFullAccess()
+      return mode as SandboxMode
     case 'rejected': throw new Error(`the user rejected escalating this ${subject} to "${mode}"`)
     case 'cancelled': throw new Error(`approval for escalating to "${mode}" was cancelled`)
     case 'unavailable': throw new Error(`sandbox escalation to "${mode}" requires approval, but no approval channel is available`)

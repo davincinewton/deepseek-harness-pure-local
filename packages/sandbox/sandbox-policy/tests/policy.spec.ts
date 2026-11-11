@@ -189,7 +189,7 @@ describe('sandbox:policy request context', () => {
     const ctx = await promptMounted({ mode, workspaceRoot: '/fallback' })
     const workspaceRoot = resolve('/projects/current')
     const expected = {
-      'workspace-write': `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(workspaceRoot)}. Some platform temporary areas may also be writable.`,
+      'workspace-write': `Current DSH file policy: workspace-write. File operations enforced by the DSH file sandbox may modify the session workspace ${JSON.stringify(workspaceRoot)}, the platform temp areas, and the configured task-infrastructure roots without asking; anything outside them prompts the user (allow once, or full access for the session). Confined commands are kernel-confined to the same write set.`,
       'danger-full-access': 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.',
     } as const
 
@@ -228,7 +228,7 @@ describe('sandbox:policy request context', () => {
     expect(await policyContext(ctx, active)).toBe(danger)
 
     setSandboxMode(active, 'workspace-write')
-    expect(await policyContext(ctx, active)).toBe(`Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(resolve('/projects/current'))}. Some platform temporary areas may also be writable.`)
+    expect(await policyContext(ctx, active)).toBe(`Current DSH file policy: workspace-write. File operations enforced by the DSH file sandbox may modify the session workspace ${JSON.stringify(resolve('/projects/current'))}, the platform temp areas, and the configured task-infrastructure roots without asking; anything outside them prompts the user (allow once, or full access for the session). Confined commands are kernel-confined to the same write set.`)
   })
 
   it('reconstructs resumed policy from the session log and omits diagnostics without an agent', async () => {
