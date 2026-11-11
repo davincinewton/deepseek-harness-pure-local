@@ -2843,7 +2843,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nYou are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the task needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it."
+                "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nYou are a delegated subagent: your sandbox mode was fixed when you were started and never inherits the delegating session's full file access. Approval prompts from this session may be answered by the user or rejected automatically. Never retry a refused operation: state the limitation in your reply so the delegating agent can handle it."
               }
             ],
             "source": {
@@ -2853,7 +2853,7 @@
               "sections": [
                 {
                   "name": "subagent:delegation",
-                  "text": "You are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the task needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it."
+                  "text": "You are a delegated subagent: your sandbox mode was fixed when you were started and never inherits the delegating session's full file access. Approval prompts from this session may be answered by the user or rejected automatically. Never retry a refused operation: state the limitation in your reply so the delegating agent can handle it."
                 }
               ]
             },
@@ -3547,7 +3547,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nYou are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the task needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it."
+                "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nYou are a delegated subagent: your sandbox mode was fixed when you were started and never inherits the delegating session's full file access. Approval prompts from this session may be answered by the user or rejected automatically. Never retry a refused operation: state the limitation in your reply so the delegating agent can handle it."
               }
             ],
             "source": {
@@ -3557,7 +3557,7 @@
               "sections": [
                 {
                   "name": "subagent:delegation",
-                  "text": "You are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the task needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it."
+                  "text": "You are a delegated subagent: your sandbox mode was fixed when you were started and never inherits the delegating session's full file access. Approval prompts from this session may be answered by the user or rejected automatically. Never retry a refused operation: state the limitation in your reply so the delegating agent can handle it."
                 }
               ]
             },

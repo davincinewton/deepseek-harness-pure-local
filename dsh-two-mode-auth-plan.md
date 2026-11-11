@@ -111,15 +111,25 @@ the third GUI answer button uses the same mode-keyed confirmation.
 
 ## 4. Phases
 
-> Status (this checkout): **Phase 1 landed** (`8007f74761` — rule-lane revert,
-> catalogs regenerated, plan doc kept). **Phase 2a/2b landed** (`8aec9b05fd` —
-> two-mode vocabulary, bwrap deleted, PROBE_SOLO Landlock probe, D2
-> user-facing fail-closed message, windows-acl single-mode runner, presets/
-> client/SDK-facing fixtures retargeted, keyless snapshots refreshed).
-> **Phase 2c landed** (`60c19c516d` — D1 extra-writable allow-set: policy
-> config + per-OS default table, folded into `writableRoots` (fs fence +
-> Seatbelt), Landlock/runnerCommand grants, windows-acl standing per-root
-> grants + agentless `--extra-write`). Phases 3–5 open.
+> Status (this checkout): ALL FIVE PHASES LANDED. Phase 1 rule-lane revert
+> (`8007f74761`). Phase 2 two-mode vocabulary, bwrap deleted, native-only
+> backends, D2 fail-closed message (`8aec9b05fd`), D1 extra-writable
+> allow-set (`60c19c516d`); the Landlock launcher builds and passes real
+> confinement e2e on a Linux dev host (musl-gcc unavailable — host-cc dev
+> build; CI owns the release matrix). Phase 3 three-answer prompt
+> (`c30e64fdbf`): pre-emptive fs gate (write/edit/read), `allowed-full-access`
+> through approval → apiproxy → GUI, confirmations keyed on sandbox mode.
+> Phase 4 delegation clamp + child-ask root routing (`5802be0186`).
+> Phase 5: TS SDK fixtures refreshed green (`examples/jsonrpc-agent`);
+> Python single-exe fixtures refreshed green locally (exe built with
+> `build-exe-for-python-sdk`, smokes pass for sdk-minimal/sdk-snapshot/
+> direct). Deferred to the with-key PR window: the web e2e goldens for the
+> three-button panel and any additional with-key recordings; the keyless
+> prompt path is pinned by the ACP `fs-gate-rejected` scenario, the
+> headless inheritance child fail-closed, and package suites for once /
+> full-access / contained paths (a keyless Use-once/Full-access example-leaf
+> scenario needs a cross-platform outside-workspace writable target that is
+> also scenario-cleanable — unsolved, deliberate gap).
 > Known pre-existing failures (not from this work): zh_CN bash-denial
 > signature test, shiki lazy-load GUI flake, three browser-provisioning
 > snapshot failures from the worktree's in-progress browser packages.
