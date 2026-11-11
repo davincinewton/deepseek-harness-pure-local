@@ -113,7 +113,7 @@ describe('BashTerminalBackend startup rollback', () => {
   it('rejects pre-aborted setup and empty sandbox argv', async () => {
     const ctx = new Context()
     await ctx.plugin(EmptySandbox)
-    await ctx.plugin(SandboxPolicyService, { mode: 'read-only', workspaceRoot: '/tmp' })
+    await ctx.plugin(SandboxPolicyService, { mode: 'workspace-write', workspaceRoot: '/tmp' })
     const backend = new BashTerminalBackend(ctx, config(), async () => terminalHandle())
     const controller = new AbortController()
     const abortReason = new Error('spawn aborted')
@@ -223,7 +223,7 @@ describe('BashTerminalBackend startup rollback', () => {
   it('resolves session mode and root together before wrapping the shell', async () => {
     const ctx = new Context()
     await ctx.plugin(RecordingSandbox)
-    await ctx.plugin(SandboxPolicyService, { mode: 'read-only', workspaceRoot: '/deployment-fallback' })
+    await ctx.plugin(SandboxPolicyService, { mode: 'workspace-write', workspaceRoot: '/deployment-fallback' })
     const terminal = terminalHandle()
     let spawned: SubprocessTerminalSpawnSpec | undefined
     const spawnTerminal = async (spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle> => {
@@ -376,7 +376,7 @@ describe('terminal-bash plugin shape', () => {
     expect(() => {
       session.append('turn/start', { turn: 1 })
     }).not.toThrow()
-    expect(() => { setSandboxMode(session, 'read-only') }).not.toThrow()
+    expect(() => { setSandboxMode(session, 'workspace-write') }).not.toThrow()
   })
 
   it('keeps the owner-lifetime sandbox fence after the local provider unloads', async () => {
@@ -404,7 +404,7 @@ describe('terminal-bash plugin shape', () => {
     const created = await ctx.terminals.spawn(owner, { type: 'stub' })
 
     const unrelated = ctx.sessions.create(SessionId('unrelated-mode'))
-    expect(() => { setSandboxMode(unrelated, 'read-only') }).not.toThrow()
+    expect(() => { setSandboxMode(unrelated, 'workspace-write') }).not.toThrow()
     expect(() => {
       session.append('turn/start', { turn: 1 })
     }).not.toThrow()
@@ -412,19 +412,19 @@ describe('terminal-bash plugin shape', () => {
     expect(() => { setSandboxMode(session, 'danger-full-access') }).not.toThrow()
     await providerFiber.dispose()
     expect(ctx.terminals.listBackends()).toEqual([])
-    expect(() => { setSandboxMode(session, 'read-only') }).toThrow(
-      'cannot change sandbox mode from "danger-full-access" to "read-only" while persistent terminal sessions are open or being created; wait for creation to settle and close them first',
+    expect(() => { setSandboxMode(session, 'workspace-write') }).toThrow(
+      'cannot change sandbox mode from "danger-full-access" to "workspace-write" while persistent terminal sessions are open or being created; wait for creation to settle and close them first',
     )
     expect(session.events.filter(event => event.type === 'sandbox/mode')).toHaveLength(1)
 
     const replacementFiber = await registerStubLocalBackend(ctx, () => stubLocalSession())
     const second = await ctx.terminals.spawn(owner, { type: 'stub' })
     await replacementFiber.dispose()
-    expect(() => { setSandboxMode(session, 'read-only') }).toThrow('open or being created')
+    expect(() => { setSandboxMode(session, 'workspace-write') }).toThrow('open or being created')
 
     await ctx.terminals.kill(owner, created.sessionId)
     await ctx.terminals.kill(owner, second.sessionId)
-    expect(() => { setSandboxMode(session, 'read-only') }).not.toThrow()
+    expect(() => { setSandboxMode(session, 'workspace-write') }).not.toThrow()
     expect(session.events.filter(event => event.type === 'sandbox/mode')).toHaveLength(2)
   })
 
@@ -454,7 +454,7 @@ describe('terminal-bash plugin shape', () => {
     const spawning = ctx.terminals.spawn(owner, { type: 'stub' })
 
     expect(ctx.terminals.hasOwnerActivity(owner)).toBe(true)
-    expect(() => { setSandboxMode(session, 'read-only') }).toThrow('open or being created')
+    expect(() => { setSandboxMode(session, 'workspace-write') }).toThrow('open or being created')
     gate.resolve(undefined)
     const created = await spawning
     await ctx.terminals.kill(owner, created.sessionId)

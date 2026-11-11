@@ -120,7 +120,6 @@ describe('windows-acl write grants (LocalSandboxProvider)', () => {
         'node', 'windows-acl-runner.js',
         '--workspace', ws,
         '--temp', tempDir,
-        '--mode', 'workspace-write',
         '--write-sid', WORKSPACE_SID,
         '--temp-write-sid', tempSid,
         '--',
@@ -138,38 +137,6 @@ describe('windows-acl write grants (LocalSandboxProvider)', () => {
       await fiber.dispose()
       expect(mockState.grants.every(grant => grant.disposed)).toBe(true)
       expect(existsSync(tempDir ?? '')).toBe(false)
-    } finally {
-      cleanup()
-    }
-  })
-
-  it('read-only materializes no capability; upgrade creates them and downgrade leaves them reusable', async () => {
-    try {
-      const { sandbox, fiber } = await setup()
-      const ws = workspaceRoot()
-      scratch.push(ws)
-      const readOnly: SandboxPolicy = { mode: 'read-only', workspaceRoot: ws, sessionId: SessionId('switch') }
-      const workspaceWrite: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: ws, sessionId: SessionId('switch') }
-
-      expect(sandbox.confine(['true'], readOnly).argv).toEqual([
-        'node', 'windows-acl-runner.js',
-        '--workspace', ws,
-        '--temp', tmpdir(),
-        '--mode', 'read-only',
-        '--',
-        'true',
-      ])
-      expect(mockState.grants).toHaveLength(0)
-
-      const upgraded = sandbox.confine(['true'], workspaceWrite)
-      expect(flag(upgraded.argv, '--temp-write-sid')).not.toBe(WORKSPACE_SID)
-      expect(mockState.grants).toHaveLength(2)
-      sandbox.confine(['true'], readOnly)
-      expect(mockState.grants).toHaveLength(2)
-      expect(mockState.grants.every(grant => !grant.disposed)).toBe(true)
-      expect(sandbox.confine(['true'], workspaceWrite).argv).toEqual(upgraded.argv)
-
-      await fiber.dispose()
     } finally {
       cleanup()
     }
@@ -303,7 +270,6 @@ describe('windows-acl write grants (LocalSandboxProvider)', () => {
         'node', 'windows-acl-runner.js',
         '--workspace', '/ws',
         '--temp', tmpdir(),
-        '--mode', 'workspace-write',
         '--',
         'pwsh', '/Command', 'x',
       ])

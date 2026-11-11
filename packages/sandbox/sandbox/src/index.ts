@@ -21,12 +21,15 @@ export type { EscalationApproval, EscalationApprover, EscalationOutcome, Escalat
 export { canonicalPath, writableRoots } from './roots.ts'
 
 /**
- * File-effect policy for confined processes. `read-only` permits only required
- * sinks such as `/dev/null`; `workspace-write` also permits the workspace and a
- * backend-defined temp area; `danger-full-access` bypasses confinement. Network
- * and process visibility are outside this vocabulary.
+ * File-effect policy for confined processes. `workspace-write` (Mode A) permits
+ * the workspace root, the platform temp areas, and required sinks such as
+ * `/dev/null`; `danger-full-access` (Mode B) bypasses confinement — the user
+ * account's reach, never elevated. Network and process visibility are outside
+ * this vocabulary. Two modes is the whole vocabulary: a narrower floor would
+ * gate reads that every tool needs, and the three-answer prompt (Deny / use
+ * once / full-access session) replaces intermediate steps.
  */
-export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type SandboxMode = 'workspace-write' | 'danger-full-access'
 
 /** A confining (non-`danger-full-access`) mode — the modes a {@link SandboxPolicy} can carry. */
 export type ConfinedSandboxMode = Exclude<SandboxMode, 'danger-full-access'>
@@ -99,9 +102,9 @@ export interface ConfinedArgv {
   enforcement: SandboxEnforcement
   /**
    * The selected backend's denial DIALECT: the case-insensitive stderr
-   * substrings a file effect denied by THIS backend produces (EROFS text
-   * under bwrap's read-only binds, EACCES under Landlock, EPERM under
-   * Seatbelt). A consumer that infers denials from a failed run's stderr
+   * substrings a file effect denied by THIS backend produces (EACCES under
+   * Landlock, EPERM under Seatbelt, ACL refusals under the Windows
+   * restricted token). A consumer that infers denials from a failed run's stderr
    * matches against exactly these rather than a cross-backend union — the
    * union claims denials a given backend never produces.
    */
@@ -132,10 +135,11 @@ export class SandboxUnavailableError extends HarnessError {
   constructor(mode: ConfinedSandboxMode, detail?: string) {
     super(
       `sandbox mode "${mode}" is requested but no sandbox backend is usable on this host; `
-      + 'refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing '
-      + 'kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL '
-      + 'restricted-token runner can start (Windows) — otherwise switch the consumer to '
-      + 'danger-full-access.'
+      + 'refusing to run the command unconfined. The USER can switch this session to full '
+      + 'access in the permission controls; fixing confinement instead means the Landlock '
+      + 'launcher on a Landlock-enabled kernel (Linux), a usable sandbox-exec (macOS), or a '
+      + 'startable restricted-token runner (Windows). Do not work around this denial. '
+      + 'Do not retry or attempt the operation another way; stop and report it to the user.'
       + (detail === undefined ? '' : ` Runner failure: ${detail}`),
       SANDBOX_UNAVAILABLE,
     )

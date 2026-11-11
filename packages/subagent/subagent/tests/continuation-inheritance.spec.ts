@@ -114,7 +114,7 @@ describe('continuable policy inheritance', () => {
 
   it('captures policy at delegation before asynchronous child creation', { timeout: 20_000 }, async () => {
     const { ctx, parent } = await setup([textResponse('child done')])
-    setSandboxMode(parent.session, 'read-only')
+    setSandboxMode(parent.session, 'workspace-write')
 
     const starting = ctx.subagents.startContinuable(startSpec(parent))
     // A parent switch after the synchronous capture belongs to the parent's
@@ -125,7 +125,7 @@ describe('continuable policy inheritance', () => {
     await waitNoActivation(ctx, started.childId)
     const loaded = await ctx.sessionPersistence.load(started.childId)
     expect(ctx.sandboxPolicy.overrideOf(parent.session)).toBe('danger-full-access')
-    expect(effectiveSandboxMode(loaded.events)).toBe('read-only')
+    expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
   })
 
   it('leaves an unswitched sandbox on the deployment default while still pinning approval', { timeout: 20_000 }, async () => {
@@ -172,17 +172,17 @@ describe('continuable policy inheritance', () => {
     if (child === undefined) throw new Error('expected the continuable child to be created')
     expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('danger-full-access')
     // Last event wins: the child's own runtime switch beats the seeded snapshot.
-    setSandboxMode(child.session, 'read-only')
-    expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('read-only')
+    setSandboxMode(child.session, 'workspace-write')
+    expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('workspace-write')
 
     await waitNoActivation(ctx, started.childId)
     const loaded = await ctx.sessionPersistence.load(started.childId)
-    expect(effectiveSandboxMode(loaded.events)).toBe('read-only')
+    expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
   })
 
   it('cold-resumes on the persisted snapshot without re-capturing the parent', { timeout: 20_000 }, async () => {
     const { ctx, parent } = await setup([textResponse('first'), textResponse('after resume')])
-    setSandboxMode(parent.session, 'read-only')
+    setSandboxMode(parent.session, 'workspace-write')
     const started = await ctx.subagents.startContinuable(startSpec(parent))
     await waitNoActivation(ctx, started.childId)
 
@@ -197,9 +197,9 @@ describe('continuable policy inheritance', () => {
 
     const loaded = await ctx.sessionPersistence.load(started.childId)
     expect(loaded.events.filter(event => event.type === 'sandbox/mode')).toMatchObject([
-      { data: { mode: 'read-only', source: 'delegation' } },
+      { data: { mode: 'workspace-write', source: 'delegation' } },
     ])
-    expect(effectiveSandboxMode(loaded.events)).toBe('read-only')
+    expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
     // The approval pin is seeded once at creation, never re-appended on resume.
     expect(loaded.events.filter(event => event.type === 'approval/policy')).toMatchObject([
       { data: { policy: 'never', source: 'delegation' } },
@@ -215,7 +215,7 @@ describe('continuable policy inheritance', () => {
       source: { kind: 'user' },
     }))
     await parent.whenIdle()
-    setSandboxMode(parent.session, 'read-only')
+    setSandboxMode(parent.session, 'workspace-write')
 
     const started = await ctx.subagents.startContinuable(startSpec(parent, 'fork'))
     await waitNoActivation(ctx, started.childId)
@@ -224,8 +224,8 @@ describe('continuable policy inheritance', () => {
     expect(loaded.meta.seedLength).toBeGreaterThan(0)
     expect(loaded.events.filter(event => event.type === 'sandbox/mode')).toMatchObject([
       { data: { mode: 'workspace-write' } },
-      { data: { mode: 'read-only', source: 'delegation' } },
+      { data: { mode: 'workspace-write', source: 'delegation' } },
     ])
-    expect(effectiveSandboxMode(loaded.events)).toBe('read-only')
+    expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
   })
 })

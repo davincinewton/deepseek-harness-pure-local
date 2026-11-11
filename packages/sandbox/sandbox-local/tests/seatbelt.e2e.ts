@@ -10,14 +10,15 @@ import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
 import { seatbeltProfileArgs } from '../src/profiles.ts'
 
 /**
- * Keyless backend integration through `confine()` and a real macOS Seatbelt process, with Linux
- * rungs forced off. Tests assert world effects and that the kernel denial matches the advertised
- * dialect; consumer coverage lives in dsh-bash-sandbox. Skips off macOS or when the profile probe
- * fails. HOME-based workspaces avoid Seatbelt's wholesale temp-directory grants, so
+ * Keyless backend integration through `confine()` and a real macOS Seatbelt
+ * process (the darwin chain's sole, unprobed candidate). Tests assert world
+ * effects and that the kernel denial matches the advertised dialect; consumer
+ * coverage lives in dsh-bash-sandbox. Skips off macOS or when the profile
+ * probe fails. HOME-based workspaces avoid Seatbelt's wholesale temp-directory grants, so
  * workspace-write proves the workspace-root grant itself.
  */
 
-const probe = spawnSync('sandbox-exec', [...seatbeltProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], { timeout: 5_000, stdio: 'ignore' })
+const probe = spawnSync('sandbox-exec', [...seatbeltProfileArgs({ mode: 'workspace-write', workspaceRoot: tmpdir() }), '--', 'true'], { timeout: 5_000, stdio: 'ignore' })
 const seatbeltUsable = probe.status === 0
 
 let ctx: Context | undefined
@@ -38,9 +39,7 @@ async function tempDir(base: string): Promise<string> {
 async function provider(): Promise<LocalSandboxProvider> {
   ctx = new Context()
   await ctx.plugin(LocalSandboxProvider, {})
-  const sandbox = ctx.sandbox as LocalSandboxProvider
-  sandbox.internals = { probeBwrap: () => false, probeLandlock: () => 'unusable' }
-  return sandbox
+  return ctx.sandbox as LocalSandboxProvider
 }
 
 /** Confine a shell command under `policy` and run it for real; returns the spawn result and the wrap's facts. */
@@ -51,34 +50,24 @@ function runConfined(sandbox: LocalSandboxProvider, command: string, policy: San
 }
 
 describe.skipIf(!seatbeltUsable)('sandbox-local: real Seatbelt confinement through sandbox-exec', () => {
-  it('read-only denies a write — the file must NOT exist, and the kernel speaks the advertised dialect', async () => {
-    const workdir = await tempDir(tmpdir())
+  it('denies a write outside the workspace — the file must NOT exist, and the kernel speaks the advertised dialect', async () => {
+    const workspace = await tempDir(homedir())
+    const outside = await tempDir(homedir())
     const sandbox = await provider()
-    const { result, confined } = runConfined(sandbox, `echo hi > ${workdir}/denied.txt`, { mode: 'read-only', workspaceRoot: workdir })
+    const { result, confined } = runConfined(sandbox, `echo hi > ${outside}/denied.txt`, { mode: 'workspace-write', workspaceRoot: workspace })
     expect(result.status).not.toBe(0)
     expect(confined.enforcement).toBe('full')
     // The wrap's denialSignatures must be what the kernel actually prints.
     expect(result.stderr.toLowerCase()).toContain('operation not permitted')
-    expect(existsSync(join(workdir, 'denied.txt'))).toBe(false)
+    expect(existsSync(join(outside, 'denied.txt'))).toBe(false)
   })
 
-  it('read-only keeps the tree readable/executable and /dev/null writable', async () => {
+  it('the confined tree stays readable/executable and /dev/null writable', async () => {
     const workdir = await tempDir(tmpdir())
     const sandbox = await provider()
-    const { result } = runConfined(sandbox, 'ls / > /dev/null && echo dev-ok', { mode: 'read-only', workspaceRoot: workdir })
+    const { result } = runConfined(sandbox, 'ls / > /dev/null && echo dev-ok', { mode: 'workspace-write', workspaceRoot: workdir })
     expect(result.status).toBe(0)
     expect(result.stdout).toBe('dev-ok\n')
-  })
-
-  it('read-only grants no temp area: a write under the user temp dir is denied too', async () => {
-    // The per-user darwin temp dir is a workspace-write grant, not a
-    // read-only one — under read-only the only write-shaped path is /dev/null.
-    const workdir = await tempDir(tmpdir())
-    const sandbox = await provider()
-    const target = join(workdir, 'tmp-denied.txt')
-    const { result } = runConfined(sandbox, `echo hi > ${target}`, { mode: 'read-only', workspaceRoot: await tempDir(homedir()) })
-    expect(result.status).not.toBe(0)
-    expect(existsSync(target)).toBe(false)
   })
 
   it('workspace-write lands a write inside the workspace root and still denies one beside it', async () => {

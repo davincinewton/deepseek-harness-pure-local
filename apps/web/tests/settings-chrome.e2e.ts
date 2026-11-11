@@ -154,7 +154,7 @@ describe('web e2e: settings modal and General preferences', () => {
     const created = scaffold.ctx.sessions.create(SessionId('settings-permission-after'))
     expect(created.events.map(event => [event.type, event.data])).toEqual([
       ['permission/preset', { preset: 'read-only' }],
-      ['sandbox/mode', { mode: 'read-only' }],
+      ['sandbox/mode', { mode: 'workspace-write' }],
       ['approval/policy', { policy: 'ask' }],
     ])
 

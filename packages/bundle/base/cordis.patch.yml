@@ -194,9 +194,6 @@
       name: '@deepseek-ai/dsh-permission-presets'
       config:
         presets:
-          read-only:
-            sandbox: read-only
-            approval: ask
           workspace-write:
             sandbox: workspace-write
             approval: ask

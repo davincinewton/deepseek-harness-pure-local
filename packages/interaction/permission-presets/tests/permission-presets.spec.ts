@@ -72,7 +72,7 @@ describe('effectivePermissionPreset', () => {
     session.append('permission/preset', { preset: 'workspace-write' })
     expect(effectivePermissionPreset(session.events)).toBe('workspace-write')
     // The backward scan steps over non-preset events to the latest selection.
-    session.append('sandbox/mode', { mode: 'read-only' })
+    session.append('sandbox/mode', { mode: 'workspace-write' })
     expect(effectivePermissionPreset(session.events)).toBe('workspace-write')
   })
 })
@@ -96,7 +96,9 @@ describe('PermissionPresetService', () => {
   it('a knob state matching no table entry derives custom — a state, not an error', async () => {
     const ctx = await mounted()
     const session = freshSession('sess-custom')
-    session.append('sandbox/mode', { mode: 'read-only' })
+    // A knob combination no table entry pairs: full access with prompts.
+    session.append('sandbox/mode', { mode: 'danger-full-access' })
+    session.append('approval/policy', { policy: 'ask' })
     expect(ctx.permissionPresets.current(session.events)).toBe(CUSTOM_PRESET)
     ctx.permissionPresets.set(session, 'danger-full-access')
     expect(ctx.permissionPresets.current(session.events)).toBe('danger-full-access')
@@ -150,7 +152,7 @@ describe('PermissionPresetService', () => {
     ctx.permissionPresets.set(session, 'danger-full-access')
     // Re-selecting from a drifted state records the choice and repairs only
     // the changed knob.
-    session.append('sandbox/mode', { mode: 'read-only' })
+    session.append('sandbox/mode', { mode: 'workspace-write' })
     ctx.permissionPresets.set(session, 'danger-full-access')
     const tail = session.events.slice(4)
     expect(tail.map(e => [e.type, e.data])).toEqual([
@@ -174,7 +176,7 @@ describe('PermissionPresetService', () => {
   })
 
   it('rejects a table entry named custom (reserved for the derived state)', async () => {
-    await expect(mounted({ config: { presets: { custom: { sandbox: 'read-only', approval: 'ask' } } } }))
+    await expect(mounted({ config: { presets: { custom: { sandbox: 'workspace-write', approval: 'ask' } } } }))
       .rejects.toThrow(/reserved for the derived not-a-preset state/)
   })
 
@@ -273,7 +275,8 @@ describe('new-session default', () => {
     })
 
     const custom = freshSession('custom-source')
-    custom.append('sandbox/mode', { mode: 'read-only' })
+    // A knob combination no table entry pairs: workspace confinement with no prompts.
+    custom.append('sandbox/mode', { mode: 'workspace-write' })
     custom.append('approval/policy', { policy: 'never' })
     const unmatched = ctx.sessions.create(SessionId('custom-resumed'), { seed: custom.events })
     expect(ctx.permissionPresets.current(unmatched.events)).toBe(CUSTOM_PRESET)

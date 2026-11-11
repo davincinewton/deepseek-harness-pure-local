@@ -372,18 +372,18 @@ describe('setTokenDefaultDaclGrant failure paths', () => {
 })
 
 describe('createRestrictedToken failure paths', () => {
-  it('builds the read-only restricting list without a write SID', () => {
+  it('builds the restricting list from logon, world, and the write SIDs', () => {
     const create = vi.fn((
       _existing: unknown, _flags: unknown, _dc: unknown, _ds: unknown, _pc: unknown, _pd: unknown,
       count: number, _sids: unknown, slot: NativePtr,
     ) => {
       koffi.encode(slot, PVOID, 9n)
-      expect(count).toBe(2)
+      expect(count).toBe(3)
       return 1
     })
     const api = { createRestrictedToken: create } as unknown as Win32Bindings
     const logon = allocBytes(12)
-    expect(createRestrictedToken(api, 1n as NativePtr, logon, [], { world: 2n as NativePtr }, 'read-only')).toBe(9n)
+    expect(createRestrictedToken(api, 1n as NativePtr, logon, [4n as NativePtr], { world: 2n as NativePtr })).toBe(9n)
   })
 
   it('builds the workspace-write restricting list with the write SID', () => {
@@ -397,7 +397,7 @@ describe('createRestrictedToken failure paths', () => {
     })
     const api = { createRestrictedToken: create } as unknown as Win32Bindings
     const logon = allocBytes(12)
-    expect(createRestrictedToken(api, 1n as NativePtr, logon, [3n as NativePtr], { world: 2n as NativePtr }, 'workspace-write')).toBe(9n)
+    expect(createRestrictedToken(api, 1n as NativePtr, logon, [3n as NativePtr], { world: 2n as NativePtr })).toBe(9n)
   })
 
   it('reports when CreateRestrictedToken fails', () => {
@@ -409,7 +409,7 @@ describe('createRestrictedToken failure paths', () => {
     const logon = allocBytes(12)
     let caught: unknown
     try {
-      createRestrictedToken(api, 1n as NativePtr, logon, [], { world: 2n as NativePtr }, 'read-only')
+      createRestrictedToken(api, 1n as NativePtr, logon, [4n as NativePtr], { world: 2n as NativePtr })
     } catch (error) {
       caught = error
     }
@@ -426,7 +426,7 @@ describe('createRestrictedToken failure paths', () => {
     const logon = allocBytes(12)
     let caught: unknown
     try {
-      createRestrictedToken(api, 1n as NativePtr, logon, [], { world: 2n as NativePtr }, 'read-only')
+      createRestrictedToken(api, 1n as NativePtr, logon, [4n as NativePtr], { world: 2n as NativePtr })
     } catch (error) {
       caught = error
     }

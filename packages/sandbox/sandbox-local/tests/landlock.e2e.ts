@@ -39,9 +39,7 @@ async function tempDir(base: string): Promise<string> {
 async function provider(): Promise<LocalSandboxProvider> {
   ctx = new Context()
   await ctx.plugin(LocalSandboxProvider, {})
-  const sandbox = ctx.sandbox as LocalSandboxProvider
-  sandbox.internals = { probeBwrap: () => false }
-  return sandbox
+  return ctx.sandbox as LocalSandboxProvider
 }
 
 /** Confine a shell command under `policy` and run it for real; returns the spawn result and the wrap's enforcement. */
@@ -52,31 +50,22 @@ function runConfined(sandbox: LocalSandboxProvider, command: string, policy: San
 }
 
 describe.skipIf(!landlockUsable)('sandbox-local: real Landlock confinement through the bundled launcher', () => {
-  it('read-only denies a write — the file must NOT exist, the wrap reports the probed enforcement', async () => {
+  it('the confined tree stays readable/executable and /dev/null writable', async () => {
     const workdir = await tempDir(tmpdir())
     const sandbox = await provider()
-    const { result, enforcement: wrapped } = runConfined(sandbox, `echo hi > ${workdir}/denied.txt`, { mode: 'read-only', workspaceRoot: workdir })
-    expect(result.status).not.toBe(0)
-    expect(wrapped).toBe(enforcement)
-    expect(existsSync(join(workdir, 'denied.txt'))).toBe(false)
-  })
-
-  it('read-only keeps the tree readable/executable and /dev/null writable', async () => {
-    const workdir = await tempDir(tmpdir())
-    const sandbox = await provider()
-    const { result } = runConfined(sandbox, 'ls / > /dev/null && echo dev-ok', { mode: 'read-only', workspaceRoot: workdir })
+    const { result } = runConfined(sandbox, 'ls / > /dev/null && echo dev-ok', { mode: 'workspace-write', workspaceRoot: workdir })
     expect(result.status).toBe(0)
     expect(result.stdout).toBe('dev-ok\n')
   })
 
-  it('read-only denies a write beneath the host /dev (the /dev/shm tmpfs must stay untouched)', async () => {
+  it('denies a write beneath the host /dev (the /dev/shm tmpfs must stay untouched)', async () => {
     // The grant is /dev/null the FILE, not /dev the directory: /dev/shm is a
     // world-writable host tmpfs, and a write landing there would be exactly
-    // the persistent host effect read-only promises never happen.
+    // the persistent host effect confinement promises never happens.
     const workdir = await tempDir(tmpdir())
     const sandbox = await provider()
     const target = `/dev/shm/dsh-landlock-e2e-${process.pid}`
-    const { result } = runConfined(sandbox, `echo hi > ${target}`, { mode: 'read-only', workspaceRoot: workdir })
+    const { result } = runConfined(sandbox, `echo hi > ${target}`, { mode: 'workspace-write', workspaceRoot: workdir })
     expect(result.status).not.toBe(0)
     expect(existsSync(target)).toBe(false)
   })
@@ -92,6 +81,7 @@ describe.skipIf(!landlockUsable)('sandbox-local: real Landlock confinement throu
 
     const denied = runConfined(sandbox, `echo hi > ${outside}/denied.txt`, { mode: 'workspace-write', workspaceRoot: workdir })
     expect(denied.result.status).not.toBe(0)
+    expect(denied.enforcement).toBe(enforcement)
     expect(existsSync(join(outside, 'denied.txt'))).toBe(false)
   })
 

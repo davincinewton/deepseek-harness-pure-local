@@ -9,29 +9,32 @@ import { writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 
 /**
- * Build the bwrap profile arguments for one file-effect policy.
- * @param policy - file-effect policy to express as bwrap mounts.
+ * Build the operator-runner profile arguments for one confined policy.
+ * The argv dialect is bwrap-compatible (`--ro-bind`, `--tmpfs`, `--bind`) —
+ * the flag language operator-supplied runners are expected to understand;
+ * DSH itself ships no built-in runner in this dialect.
+ * @param policy - file-effect policy to express as runner mounts.
  * @returns profile arguments before the trailing separator and command argv.
  */
-export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
-  const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent']
-  if (policy.mode === 'workspace-write') {
-    args.push('--tmpfs', '/tmp')
-    args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)
-  }
-  return args
+export function runnerCommandProfileArgs(policy: SandboxPolicy): string[] {
+  // confine() receives a confined policy, whose only mode is workspace-write.
+  return [
+    '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent',
+    '--tmpfs', '/tmp',
+    '--bind', policy.workspaceRoot, policy.workspaceRoot,
+  ]
 }
 
 /**
- * Build the Landlock launcher grants for one file-effect policy.
+ * Build the Landlock launcher grants for one confined policy: everything
+ * readable; read-write the launcher-dialect roots (`/dev/null`, host `/tmp`,
+ * the workspace root — the Landlock spelling of the writable-root meaning,
+ * parity with {@link writableRoots} pinned by test).
  * @param policy - file-effect policy to express as Landlock allow-list grants.
  * @returns launcher grant arguments before the trailing separator and command argv.
  */
 export function landlockProfileArgs(policy: SandboxPolicy): string[] {
-  const readWrite = ['/dev/null']
-  if (policy.mode === 'workspace-write') {
-    readWrite.push('/tmp', policy.workspaceRoot)
-  }
+  const readWrite = ['/dev/null', '/tmp', policy.workspaceRoot]
   return landlockGrantArgs({ readOnly: ['/'], readWrite })
 }
 

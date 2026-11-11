@@ -118,24 +118,24 @@ describe.skipIf(!packable)('sandbox-local: packed-tarball distribution (publish-
 
     // The consumer script runs under PLAIN node against the installed
     // packages and reports a JSON verdict; every assertion happens back in
-    // the test. bwrap is forced off so the wrap must select the INSTALLED
-    // launcher; a non-enforcing kernel must surface the fail-closed error.
+    // the test. The wrap must select the INSTALLED launcher; a non-enforcing
+    // kernel must surface the fail-closed error.
     writeFileSync(join(consumerDir, 'consumer.mjs'), `
       import { spawnSync } from 'node:child_process'
-      import { existsSync } from 'node:fs'
+      import { existsSync, mkdtempSync } from 'node:fs'
       import { Context } from '@deepseek-ai/cordis'
       import { launcherPath } from '@deepseek-ai/node-addon-landlock-run'
       import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
       const ctx = new Context()
       await ctx.plugin(LocalSandboxProvider, {})
       const sandbox = ctx.sandbox
-      sandbox.internals = { probeBwrap: () => false }
       const launcher = launcherPath()
       const probe = spawnSync(launcher, ['--probe'], { encoding: 'utf8', timeout: 5000 })
       const out = { launcher, launcherExists: existsSync(launcher), enforcing: probe.status === 0 }
       const workdir = process.argv[2]
       if (out.enforcing) {
-        const confined = sandbox.confine(['bash', '-c', \`echo hi > \${workdir}/denied.txt\`], { mode: 'read-only', workspaceRoot: workdir })
+        const workspace = mkdtempSync(\`\${workdir}/ws-\`)
+        const confined = sandbox.confine(['bash', '-c', \`echo hi > \${workdir}/denied.txt\`], { mode: 'workspace-write', workspaceRoot: workspace })
         out.wrapArgv0 = confined.argv[0]
         out.enforcement = confined.enforcement
         const run = spawnSync(confined.argv[0], confined.argv.slice(1), { encoding: 'utf8', timeout: 30000 })
@@ -143,7 +143,7 @@ describe.skipIf(!packable)('sandbox-local: packed-tarball distribution (publish-
         out.stderrHasDialect = /permission denied/i.test(run.stderr)
       } else {
         try {
-          sandbox.confine(['true'], { mode: 'read-only', workspaceRoot: workdir })
+          sandbox.confine(['true'], { mode: 'workspace-write', workspaceRoot: workdir })
           out.confineOutcome = 'wrapped'
         } catch (error) {
           out.confineOutcome = error?.code === 'SANDBOX_UNAVAILABLE' ? 'fail-closed' : String(error)

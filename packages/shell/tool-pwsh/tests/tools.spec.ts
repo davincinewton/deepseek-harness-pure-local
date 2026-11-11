@@ -166,7 +166,7 @@ class ConfiningFakeBash extends ShellExecutor {
   modes: Array<string | undefined> = []
 
   override get sandboxMode() {
-    return 'read-only' as const
+    return 'workspace-write' as const
   }
 
   override resolve(request: ShellExecRequest): ShellExecSpec {
@@ -186,7 +186,7 @@ class ConfiningFakeBash extends ShellExecutor {
     this.modes.push(spec.sandboxPolicy?.mode)
     return runResult('ok\n', {
       sandbox: {
-        mode: spec.sandboxPolicy?.mode ?? 'read-only',
+        mode: spec.sandboxPolicy?.mode ?? 'workspace-write',
         denied: false,
         ...spec.command === 'without optional sandbox facts'
           ? {}
@@ -225,7 +225,7 @@ async function setupSandboxed(withApproval = false) {
  * `session.append`).
  */
 function sandboxAgent(
-  mode?: 'read-only' | 'workspace-write' | 'danger-full-access',
+  mode?: 'workspace-write' | 'danger-full-access',
   ctx?: Context,
   onAppend?: (type: string) => void,
 ): Agent {
@@ -510,7 +510,7 @@ describe('per-call sandbox policy resolution', () => {
     // policy service (realpath + resolve), NEVER the web server's launch dir;
     // the calling session's identity rides along for backend per-session state.
     expect(bash.requests[0]?.sandboxPolicy).toEqual({
-      mode: 'read-only',
+      mode: 'workspace-write',
       workspaceRoot: resolvePath(realpathSync.native(sessionCwd)),
       sessionId: 'policy-session',
     })
@@ -520,7 +520,7 @@ describe('per-call sandbox policy resolution', () => {
     const { ctx, bash } = await setupSandboxed()
     await call(ctx, 'pwsh', { command: 'Write-Output hi', description: 'say hi' })
     expect(bash.requests[0]?.sandboxPolicy).toEqual({
-      mode: 'read-only',
+      mode: 'workspace-write',
       workspaceRoot: resolvePath(realpathSync.native(process.cwd())),
     })
 
@@ -548,7 +548,7 @@ describe('sandbox escalation through ctx.approval', () => {
   const escalate = {
     command: 'Write-Output ok',
     description: 'test escalation',
-    sandbox_permissions: 'workspace-write',
+    sandbox_permissions: 'danger-full-access',
     justification: 'the command needs workspace writes',
   }
 
@@ -556,17 +556,16 @@ describe('sandbox escalation through ctx.approval', () => {
     const { ctx } = await setupSandboxed()
     const schema = ctx.tools.schemas().find(item => item.name === 'pwsh')!
     const properties = schema.parameters.properties as Record<string, { enum?: string[] }>
-    expect(properties['sandbox_permissions']?.enum).toEqual(['workspace-write', 'danger-full-access'])
+    expect(properties['sandbox_permissions']?.enum).toEqual(['danger-full-access'])
     expect(schema.description).toContain('approval prompt')
-    expect(schema.description).toContain('ConstrainedLanguage')
-    expect(schema.description).toContain('workspace-write stays in FullLanguage')
-    expect(schema.description).toContain('In both confined modes, programs cannot open named pipes')
+    expect(schema.description).toContain('pwsh stays in FullLanguage')
+    expect(schema.description).toContain('Under confinement, programs cannot open named pipes')
     expect(schema.description).toContain('fails with EPERM')
 
     for (const args of [
-      { command: 'Write-Output ok', description: 'd', sandbox_permissions: 'workspace-write' },
+      { command: 'Write-Output ok', description: 'd', sandbox_permissions: 'danger-full-access' },
       { command: 'Write-Output ok', description: 'd', justification: 'why' },
-      { command: 'Write-Output ok', description: 'd', sandbox_permissions: 'workspace-write', justification: ' ' },
+      { command: 'Write-Output ok', description: 'd', sandbox_permissions: 'danger-full-access', justification: ' ' },
     ]) {
       expect((await call(ctx, 'pwsh', args)).isError).toBe(true)
     }
@@ -588,7 +587,7 @@ describe('sandbox escalation through ctx.approval', () => {
     const { ctx } = await setupSandboxed(true)
     const prompted = vi.fn()
     ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
-    const result = await call(ctx, 'pwsh', { ...escalate, sandbox_permissions: 'workspace-write' }, sandboxAgent('workspace-write'))
+    const result = await call(ctx, 'pwsh', { ...escalate, sandbox_permissions: 'danger-full-access' }, sandboxAgent('danger-full-access'))
     expect(text(result)).toContain('not strictly wider')
     expect(prompted).not.toHaveBeenCalled()
 
@@ -635,7 +634,7 @@ describe('sandbox escalation through ctx.approval', () => {
     expect(foreground.isError).toBe(false)
     const background = await call(ctx, 'pwsh', { ...escalate, run_in_background: true }, agent)
     expect(text(background)).toBe('started background job pwsh-1')
-    expect(bash.modes).toEqual(['workspace-write', 'workspace-write'])
+    expect(bash.modes).toEqual(['danger-full-access', 'danger-full-access'])
   })
 
   it('does not publish detached work when cancellation follows the escalation grant', async () => {
@@ -682,7 +681,7 @@ describe('sandbox escalation through ctx.approval', () => {
     if (result.isError) throw new Error('expected foreground pwsh success')
     expect(result.value).toMatchObject({
       kind: 'foreground',
-      sandbox: { mode: 'read-only', denied: false },
+      sandbox: { mode: 'workspace-write', denied: false },
     })
     expect((result.value as { sandbox: object }).sandbox).not.toHaveProperty('enforcement')
     expect((result.value as { sandbox: object }).sandbox).not.toHaveProperty('runnerFailed')
@@ -951,21 +950,21 @@ describe('renderPwshResult sandbox markers', () => {
   }
 
   it('a denied run reports the denial marker before the exit marker', () => {
-    expect(renderPwshResult({ ...base, exitCode: 2, sandbox: { mode: 'read-only', denied: true } }))
-      .toBe('out\n[sandbox: file access denied under read-only mode]\n[exit code: 2]')
+    expect(renderPwshResult({ ...base, exitCode: 2, sandbox: { mode: 'workspace-write', denied: true } }))
+      .toBe('out\n[sandbox: file access denied under workspace-write mode]\n[exit code: 2]')
   })
 
   it('hints only when the composition advertises escalation', () => {
-    const denied = { ...base, sandbox: { mode: 'read-only' as const, denied: true } }
-    expect(renderPwshResult(denied, ['workspace-write'])).toBe(
-      'out\n[sandbox: file access denied under read-only mode]\n'
+    const denied = { ...base, sandbox: { mode: 'workspace-write' as const, denied: true } }
+    expect(renderPwshResult(denied, ['danger-full-access'])).toBe(
+      'out\n[sandbox: file access denied under workspace-write mode]\n'
       + '[sandbox: escalation available — retry this exact command once with sandbox_permissions '
       + '(the narrowest wider mode that suffices) + justification; the approval prompt asks the user]',
     )
   })
 
   it('a confined run without a denial adds no sandbox marker', () => {
-    expect(renderPwshResult({ ...base, sandbox: { mode: 'read-only', denied: false } })).toBe('out\n')
+    expect(renderPwshResult({ ...base, sandbox: { mode: 'workspace-write', denied: false } })).toBe('out\n')
   })
 })
 
@@ -1007,15 +1006,15 @@ describe('renderPwshProcessRead', () => {
   })
 
   it('appends the runner-failed notice (denial outranked)', () => {
-    expect(renderPwshProcessRead({ delta: 'x', lossy: false }, { mode: 'read-only', denied: true, runnerFailed: true }))
-      .toBe('x\n[sandbox: the sandbox runner itself failed under read-only mode — the command did not run; this is a sandbox problem, not a command failure]')
+    expect(renderPwshProcessRead({ delta: 'x', lossy: false }, { mode: 'workspace-write', denied: true, runnerFailed: true }))
+      .toBe('x\n[sandbox: the sandbox runner itself failed under workspace-write mode — the command did not run; this is a sandbox problem, not a command failure]')
   })
 
   it('appends the denial marker and hints only when escalation is advertised', () => {
-    expect(renderPwshProcessRead({ delta: 'x', lossy: false }, { mode: 'read-only', denied: true }))
-      .toBe('x\n[sandbox: file access denied under read-only mode]')
-    expect(renderPwshProcessRead({ delta: 'x', lossy: false }, { mode: 'read-only', denied: true }, ['workspace-write']))
-      .toBe('x\n[sandbox: file access denied under read-only mode]\n'
+    expect(renderPwshProcessRead({ delta: 'x', lossy: false }, { mode: 'workspace-write', denied: true }))
+      .toBe('x\n[sandbox: file access denied under workspace-write mode]')
+    expect(renderPwshProcessRead({ delta: 'x', lossy: false }, { mode: 'workspace-write', denied: true }, ['danger-full-access']))
+      .toBe('x\n[sandbox: file access denied under workspace-write mode]\n'
         + '[sandbox: escalation available — retry this exact command once with sandbox_permissions '
         + '(the narrowest wider mode that suffices) + justification; the approval prompt asks the user]')
   })

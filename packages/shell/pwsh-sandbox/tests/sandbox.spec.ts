@@ -165,7 +165,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
     rmSync(spillDir, { recursive: true, force: true })
   })
 
-  const RO: SandboxExecutionPolicy = { mode: 'read-only', workspaceRoot: '/ws' }
+  const RO: SandboxExecutionPolicy = { mode: 'workspace-write', workspaceRoot: '/ws' }
 
   it('wraps the exact pwsh argv through ctx.sandbox with the per-call policy', async () => {
     const { executor, calls } = await setup()
@@ -178,7 +178,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
     expect(call?.argv[0]).toMatch(/pwsh(\.exe)?$/u)
     expect(call?.argv).toContain('-NonInteractive')
     expect(call?.argv.at(-1)).toContain('echo wrapped')
-    expect(result.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'full' })
+    expect(result.sandbox).toEqual({ mode: 'workspace-write', denied: false, enforcement: 'full' })
   }, 30_000)
 
   it('advertises the deployment default mode and stamps the deployment policy when none rides the request', async () => {
@@ -220,7 +220,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
       sandboxPolicy: RO,
     }))
     expect(result.exitCode).not.toBe(0)
-    expect(result.sandbox).toEqual({ mode: 'read-only', denied: true, enforcement: 'full' })
+    expect(result.sandbox).toEqual({ mode: 'workspace-write', denied: true, enforcement: 'full' })
   }, 30_000)
 
   it('a runner launch refusal fails closed with SANDBOX_UNAVAILABLE, never unconfined', async () => {
@@ -283,7 +283,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
     const { executor } = await setup()
     const clean = executor.start(executor.resolve({ command: 'echo background-ok', sandboxPolicy: RO }))
     await clean.done
-    expect(clean.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'full' })
+    expect(clean.sandbox).toEqual({ mode: 'workspace-write', denied: false, enforcement: 'full' })
   }, 30_000)
 
   // POSIX-only denial device (mode-0555 scratch); win32 real-sandbox denial
@@ -295,7 +295,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
       sandboxPolicy: RO,
     }))
     await denied.done
-    expect(denied.sandbox).toEqual({ mode: 'read-only', denied: true, enforcement: 'full' })
+    expect(denied.sandbox).toEqual({ mode: 'workspace-write', denied: true, enforcement: 'full' })
   }, 30_000)
 
   it('background spawn rejections settle as runnerFailed facts', async () => {
@@ -307,7 +307,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
     }))
     const proc = executor.start(executor.resolve({ command: 'echo never', sandboxPolicy: RO }))
     await proc.done
-    expect(proc.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'full', runnerFailed: true })
+    expect(proc.sandbox).toEqual({ mode: 'workspace-write', denied: false, enforcement: 'full', runnerFailed: true })
     // The failure note surfaces through the read path.
     const read = proc.readOutput()
     expect(read.delta).toContain('spawn failed')

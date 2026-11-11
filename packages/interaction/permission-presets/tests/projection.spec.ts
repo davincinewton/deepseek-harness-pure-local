@@ -70,7 +70,9 @@ describe('permissions projection unit', () => {
 
   it('appends custom as a current-only option when the knobs match no preset', async () => {
     const { ctx, session } = await harness()
-    session.append('sandbox/mode', { mode: 'read-only' })
+    // A knob combination no table entry pairs: full access with prompts.
+    session.append('sandbox/mode', { mode: 'danger-full-access' })
+    session.append('approval/policy', { policy: 'ask' })
     const value = ctx.sessionProjections.snapshot(session).values.permissions
     expect(value?.currentValue).toBe('custom')
     expect(value?.options.at(-1)).toMatchObject({ value: 'custom', name: 'Custom' })

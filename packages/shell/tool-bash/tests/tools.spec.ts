@@ -104,7 +104,7 @@ class RecordingSandboxExecutor extends ShellExecutor {
   readonly modes: Array<string | undefined> = []
 
   override get sandboxMode() {
-    return 'read-only' as const
+    return 'workspace-write' as const
   }
 
   resolve(request: ShellExecRequest): ShellExecSpec {
@@ -114,7 +114,7 @@ class RecordingSandboxExecutor extends ShellExecutor {
       stdoutMaxBytes: request.stdoutMaxBytes ?? 64_000,
       timeoutMs: request.timeoutMs ?? 1000,
       ...request.signal ? { signal: request.signal } : {},
-      sandboxPolicy: request.sandboxPolicy ?? { mode: 'read-only', workspaceRoot: process.cwd() },
+      sandboxPolicy: request.sandboxPolicy ?? { mode: 'workspace-write', workspaceRoot: process.cwd() },
     }
   }
 
@@ -129,7 +129,7 @@ class RecordingSandboxExecutor extends ShellExecutor {
       stdout: { text: 'ok', truncated: false },
       stderr: { text: '', truncated: false },
       sandbox: {
-        mode: spec.sandboxPolicy?.mode ?? 'read-only',
+        mode: spec.sandboxPolicy?.mode ?? 'workspace-write',
         denied: false,
         ...spec.command === 'without optional sandbox facts'
           ? {}
@@ -145,7 +145,7 @@ class RecordingSandboxExecutor extends ShellExecutor {
       exitCode: 0,
       signal: null,
       done: Promise.resolve(),
-      sandbox: { mode: spec.sandboxPolicy?.mode ?? 'read-only', denied: false },
+      sandbox: { mode: spec.sandboxPolicy?.mode ?? 'workspace-write', denied: false },
       readOutput: () => ({ delta: '', lossy: false }),
       kill: () => false,
     }
@@ -197,7 +197,7 @@ async function setupSandboxed(withApproval = false) {
 }
 
 function sandboxAgent(
-  mode?: 'read-only' | 'workspace-write' | 'danger-full-access',
+  mode?: 'workspace-write' | 'danger-full-access',
   ctx?: Context,
   onAppend?: (type: string) => void,
 ): Agent {
@@ -572,8 +572,8 @@ describe('sandbox escalation through the generic task producer', () => {
   const escalate = {
     command: 'true',
     description: 'test escalation',
-    sandbox_permissions: 'workspace-write',
-    justification: 'the command needs workspace writes',
+    sandbox_permissions: 'danger-full-access',
+    justification: 'the command needs files outside the workspace',
   }
 
   it('fails load when a confining executor has no shared sandbox-policy resolver', async () => {
@@ -589,13 +589,13 @@ describe('sandbox escalation through the generic task producer', () => {
     const { ctx } = await setupSandboxed()
     const schema = ctx.tools.schemas().find(item => item.name === 'bash')!
     const properties = schema.parameters.properties as Record<string, { enum?: string[] }>
-    expect(properties['sandbox_permissions']?.enum).toEqual(['workspace-write', 'danger-full-access'])
+    expect(properties['sandbox_permissions']?.enum).toEqual(['danger-full-access'])
     expect(schema.description).toContain('approval prompt')
 
     for (const args of [
-      { command: 'true', description: 'd', sandbox_permissions: 'workspace-write' },
+      { command: 'true', description: 'd', sandbox_permissions: 'danger-full-access' },
       { command: 'true', description: 'd', justification: 'why' },
-      { command: 'true', description: 'd', sandbox_permissions: 'workspace-write', justification: ' ' },
+      { command: 'true', description: 'd', sandbox_permissions: 'danger-full-access', justification: ' ' },
     ]) {
       expect((await call(ctx, 'bash', args)).isError).toBe(true)
     }
@@ -608,7 +608,7 @@ describe('sandbox escalation through the generic task producer', () => {
     const { ctx } = await setupSandboxed(true)
     const prompted = vi.fn()
     ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
-    const result = await call(ctx, 'bash', { ...escalate, sandbox_permissions: 'workspace-write' }, sandboxAgent('workspace-write'))
+    const result = await call(ctx, 'bash', { ...escalate, sandbox_permissions: 'danger-full-access' }, sandboxAgent('danger-full-access'))
     expect(text(result)).toContain('not strictly wider')
     expect(prompted).not.toHaveBeenCalled()
 
@@ -655,7 +655,7 @@ describe('sandbox escalation through the generic task producer', () => {
     expect(foreground.isError).toBe(false)
     const background = await call(ctx, 'bash', { ...escalate, run_in_background: true }, agent)
     expect(text(background)).toBe('started background job bash-1')
-    expect(bash.modes).toEqual(['workspace-write', 'workspace-write'])
+    expect(bash.modes).toEqual(['danger-full-access', 'danger-full-access'])
   })
 
   it('does not publish detached work when cancellation follows the escalation grant', async () => {
@@ -703,7 +703,7 @@ describe('sandbox escalation through the generic task producer', () => {
     if (result.isError) throw new Error('expected foreground bash success')
     expect(result.value).toMatchObject({
       kind: 'foreground',
-      sandbox: { mode: 'read-only', denied: false },
+      sandbox: { mode: 'workspace-write', denied: false },
     })
     expect((result.value as { sandbox: object }).sandbox).not.toHaveProperty('enforcement')
     expect((result.value as { sandbox: object }).sandbox).not.toHaveProperty('runnerFailed')
@@ -750,10 +750,10 @@ describe('renderProcessRead', () => {
   })
 
   it('appends settled sandbox denial and runner-failure facts', () => {
-    expect(renderProcessRead(base, { mode: 'read-only', denied: true }, ['workspace-write']))
+    expect(renderProcessRead(base, { mode: 'workspace-write', denied: true }, ['danger-full-access']))
       .toContain('[sandbox: escalation available')
-    expect(renderProcessRead({ delta: 'tail', lossy: false }, { mode: 'read-only', denied: true }))
-      .toBe('tail\n[sandbox: file access denied under read-only mode]')
+    expect(renderProcessRead({ delta: 'tail', lossy: false }, { mode: 'workspace-write', denied: true }))
+      .toBe('tail\n[sandbox: file access denied under workspace-write mode]')
     const runner = renderProcessRead(
       { delta: '', lossy: false },
       { mode: 'workspace-write', denied: true, runnerFailed: true },
@@ -897,11 +897,11 @@ describe('renderResult', () => {
       timeoutMs: 1000,
       stdout: { text: '', truncated: false },
       stderr: { text: 'denied', truncated: false },
-      sandbox: { mode: 'read-only', denied: true },
+      sandbox: { mode: 'workspace-write', denied: true },
     }
-    expect(renderResult(result)).toMatch(/denied under read-only mode\]\n\[exit code: 1\]$/)
-    expect(renderResult(result, ['workspace-write'])).toContain('[sandbox: escalation available')
-    expect(renderResult({ ...result, sandbox: { mode: 'read-only', denied: false } }, ['workspace-write']))
+    expect(renderResult(result)).toMatch(/denied under workspace-write mode\]\n\[exit code: 1\]$/)
+    expect(renderResult(result, ['danger-full-access'])).toContain('[sandbox: escalation available')
+    expect(renderResult({ ...result, sandbox: { mode: 'workspace-write', denied: false } }, ['danger-full-access']))
       .not.toContain('[sandbox:')
   })
 })

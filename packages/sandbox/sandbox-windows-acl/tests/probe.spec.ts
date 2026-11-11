@@ -54,7 +54,6 @@ describe.skipIf(!isWin32 || !pwshAvailable())('AclSandbox write restriction', ()
       tempDir: isolatedTemp,
       writeSid: 'S-1-4-9000-4',
       tempWriteSid: 'S-1-4-9000-4-1',
-      mode: 'workspace-write',
     })
     await sandbox.init()
   })
@@ -95,12 +94,12 @@ describe.skipIf(!isWin32 || !pwshAvailable())('AclSandbox write restriction', ()
   it('fails closed when the write SID cannot be parsed (no unrestricted fallback)', async () => {
     // A malformed SID makes ConvertStringSidToSidW fail; init must throw
     // before any grant is applied and never spawn unrestricted.
-    const broken = new AclSandbox({ writableDirs: [writableDir], tempDir: null, writeSid: 'S-1-4-abc-1', mode: 'workspace-write' })
+    const broken = new AclSandbox({ writableDirs: [writableDir], tempDir: null, writeSid: 'S-1-4-abc-1' })
     await expect(broken.init()).rejects.toThrow(/ConvertStringSidToSidW/u)
   }, 15_000)
 
   it('failed init clears provisional temp state before a retry', async () => {
-    const broken = new AclSandbox({ writableDirs: [writableDir], tempDir: null, writeSid: 'S-1-4-abc-1', mode: 'workspace-write' })
+    const broken = new AclSandbox({ writableDirs: [writableDir], tempDir: null, writeSid: 'S-1-4-abc-1' })
     const provisionalState = broken as unknown as { tempDirResolved: string | undefined }
     provisionalState.tempDirResolved = isolatedTemp
 

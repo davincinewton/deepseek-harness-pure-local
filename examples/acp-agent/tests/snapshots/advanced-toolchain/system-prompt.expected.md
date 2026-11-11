@@ -157,7 +157,7 @@ interface ToolArgsMap {
     /** Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies. */
     run_in_background?: boolean;
     /** The wider sandbox mode this command needs. Only valid as a one-shot retry of a command the sandbox just denied; requires justification and user approval. */
-    sandbox_permissions?: "workspace-write" | "danger-full-access";
+    sandbox_permissions?: "danger-full-access";
     /** Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access. */
     justification?: string;
   } & Record<string, JsonValue>;
@@ -240,7 +240,7 @@ interface ToolArgsMap {
     /** Replace all matches. Defaults to false; when false, old_string must appear exactly once. */
     replace_all?: boolean;
     /** The wider sandbox mode this file operation needs. Only valid as a one-shot retry of an operation the sandbox just denied; requires justification and user approval. */
-    sandbox_permissions?: "workspace-write" | "danger-full-access";
+    sandbox_permissions?: "danger-full-access";
     /** Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access. */
     justification?: string;
   } & Record<string, JsonValue>;
@@ -377,7 +377,7 @@ interface ToolArgsMap {
     /** Full UTF-8 text content to write. */
     content: string;
     /** The wider sandbox mode this file operation needs. Only valid as a one-shot retry of an operation the sandbox just denied; requires justification and user approval. */
-    sandbox_permissions?: "workspace-write" | "danger-full-access";
+    sandbox_permissions?: "danger-full-access";
     /** Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access. */
     justification?: string;
   } & Record<string, JsonValue>;

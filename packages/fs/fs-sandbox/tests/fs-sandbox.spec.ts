@@ -1,7 +1,7 @@
 /**
  * Tests for the sandbox-enforcing filesystem backend: the per-call policy fence
- * on write/edit (read-only denies, workspace-write contains, danger-full-access
- * passes through), reads always passing through, the capability fact, and the
+ * on write/edit (workspace-write contains, danger-full-access passes through),
+ * reads always passing through, the capability fact, and the
  * containment matrix — `..` traversal, absolute paths outside, and symlink
  * escapes (a symlinked directory inside the workspace pointing out, and a new
  * file created under one). The fence is exercised on a real filesystem: a
@@ -60,30 +60,6 @@ describe('the capability fact', () => {
   it('reports the deployment default mode (what the tool layer advertises against)', async () => {
     await boot('workspace-write')
     expect(fs.sandboxMode).toBe('workspace-write')
-  })
-})
-
-describe('read-only', () => {
-  beforeEach(() => boot('read-only'))
-
-  it('denies write, leaving no file on disk', async () => {
-    const path = join(workspace, 'denied.txt')
-    await expect(fs.writeText(await target(path), 'x')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-    expect(existsSync(path)).toBe(false)
-  })
-
-  it('denies edit of an existing file (the content is unchanged)', async () => {
-    const path = join(workspace, 'file.txt')
-    await writeFile(path, 'original')
-    await expect(fs.editText(await target(path), { oldString: 'original', newString: 'changed', replaceAll: false }))
-      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-    expect(await readFile(path, 'utf8')).toBe('original')
-  })
-
-  it('allows reads (every mode permits reading)', async () => {
-    const path = join(workspace, 'readable.txt')
-    await writeFile(path, 'hello')
-    expect(await fs.readText(await target(path))).toBe('hello')
   })
 })
 
@@ -195,22 +171,15 @@ describe('danger-full-access', () => {
 })
 
 describe('the per-call policy override (escalation)', () => {
-  it('a workspace-write stamp on a read-only default lets a contained write land for that call only', async () => {
-    await boot('read-only')
-    const path = join(workspace, 'escalated.txt')
-    // Default read-only would deny; the per-call workspace-write policy allows it (contained).
-    await fs.writeText(await target(path), 'granted', undefined, undefined, { mode: 'workspace-write', workspaceRoot: workspace })
-    expect(await readFile(path, 'utf8')).toBe('granted')
-    // A neighboring plain call still runs under the read-only default.
-    await expect(fs.writeText(await target(join(workspace, 'plain.txt')), 'x'))
-      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-  })
-
-  it('a danger-full-access stamp bypasses the fence for that call', async () => {
-    await boot('read-only')
+  it('a danger-full-access stamp on the workspace-write default lets an outside write land for that call only', async () => {
+    await boot('workspace-write')
     const path = join(outside, 'granted-full.txt')
+    // The default fence would deny outside the workspace; the per-call stamp allows it.
     await fs.writeText(await target(path), 'full', undefined, undefined, { mode: 'danger-full-access', workspaceRoot: workspace })
     expect(await readFile(path, 'utf8')).toBe('full')
+    // A neighboring plain call still runs under the workspace-write default.
+    await expect(fs.writeText(await target(join(outside, 'plain.txt')), 'x'))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
   })
 })
 
@@ -228,8 +197,8 @@ describe('registration and HMR safety', () => {
 
 describe('FsError identity', () => {
   it('the denial is a structured FsError distinct from a host permission error', async () => {
-    await boot('read-only')
-    const error = await fs.writeText(await target(join(workspace, 'x.txt')), 'x').catch((e: unknown) => e)
+    await boot('workspace-write')
+    const error = await fs.writeText(await target(join(outside, 'x.txt')), 'x').catch((e: unknown) => e)
     expect(error).toBeInstanceOf(FsError)
     expect((error as FsError).code).toBe('FS_SANDBOX_DENIED')
   })

@@ -43,10 +43,9 @@ async function tempDir(base: string): Promise<string> {
   return dir
 }
 
-async function sandboxedBash(workspace: string, mode: 'read-only' | 'workspace-write'): Promise<SandboxBashExecutor> {
+async function sandboxedBash(workspace: string, mode: 'workspace-write'): Promise<SandboxBashExecutor> {
   ctx = new Context()
   await ctx.plugin(LocalSandboxProvider, {})
-  ;(ctx.sandbox as LocalSandboxProvider).internals = { probeBwrap: () => false }
   await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: workspace })
   await ctx.plugin(LocalSubprocessRuntime)
   await ctx.plugin(SandboxBashExecutor, { cwd: workspace, timeoutMs: 30_000 })
@@ -56,10 +55,10 @@ async function sandboxedBash(workspace: string, mode: 'read-only' | 'workspace-w
 describe.skipIf(!landlockUsable)('bash-sandbox: real Landlock confinement through ctx.shell', () => {
   it('read-only denies a write — the file must NOT exist, the result carries denial + enforcement facts', async () => {
     const workdir = await tempDir(tmpdir())
-    const bash = await sandboxedBash(workdir, 'read-only')
+    const bash = await sandboxedBash(workdir, 'workspace-write')
     const result = await bash.run(bash.resolve({ command: `echo hi > ${workdir}/denied.txt` }))
     expect(result.exitCode).not.toBe(0)
-    expect(result.sandbox).toEqual({ mode: 'read-only', denied: true, enforcement })
+    expect(result.sandbox).toEqual({ mode: 'workspace-write', denied: true, enforcement })
     expect(existsSync(join(workdir, 'denied.txt'))).toBe(false)
   })
 
@@ -81,20 +80,20 @@ describe.skipIf(!landlockUsable)('bash-sandbox: real Landlock confinement throug
 
   it('classifies a background denial once the task settles', async () => {
     const workdir = await tempDir(homedir())
-    const bash = await sandboxedBash(workdir, 'read-only')
+    const bash = await sandboxedBash(workdir, 'workspace-write')
     const task = bash.start(bash.resolve({ command: `echo hi > ${workdir}/bg-denied.txt` }))
     await task.done
-    expect(task.sandbox).toEqual({ mode: 'read-only', denied: true, enforcement })
+    expect(task.sandbox).toEqual({ mode: 'workspace-write', denied: true, enforcement })
     expect(existsSync(join(workdir, 'bg-denied.txt'))).toBe(false)
   })
 
   it('an approved escalated retry — the spec-level workspace-write override — lands the exact write read-only denied', async () => {
     const workdir = await tempDir(homedir())
-    const bash = await sandboxedBash(workdir, 'read-only')
+    const bash = await sandboxedBash(workdir, 'workspace-write')
     const command = `printf escalated > ${workdir}/escalated.txt`
     const strict = await bash.run(bash.resolve({ command }))
     expect(strict.exitCode).not.toBe(0)
-    expect(strict.sandbox).toEqual({ mode: 'read-only', denied: true, enforcement: enforcement })
+    expect(strict.sandbox).toEqual({ mode: 'workspace-write', denied: true, enforcement: enforcement })
     expect(existsSync(join(workdir, 'escalated.txt'))).toBe(false)
     const retried = await bash.run(bash.resolve({ command, sandboxPolicy: { mode: 'workspace-write', workspaceRoot: workdir } }))
     expect(retried.exitCode).toBe(0)

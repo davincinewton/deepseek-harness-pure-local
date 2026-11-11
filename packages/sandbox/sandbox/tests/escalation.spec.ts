@@ -18,14 +18,13 @@ import {
 import type { EscalationApprover, EscalationOutcome } from '@deepseek-ai/dsh-sandbox'
 
 describe('the strictly-wider ladder', () => {
-  it('read-only escalates to either wider mode; workspace-write only to full access', () => {
-    expect(WIDER_MODES['read-only']).toEqual(['workspace-write', 'danger-full-access'])
+  it('workspace-write escalates only to full access (two modes, one widening)', () => {
     expect(WIDER_MODES['workspace-write']).toEqual(['danger-full-access'])
     expect(WIDER_MODES['danger-full-access']).toBeUndefined()
   })
 
-  it('the target enum is the closed set every session could escalate TO (read-only is the floor)', () => {
-    expect(ESCALATION_TARGETS).toEqual(['workspace-write', 'danger-full-access'])
+  it('the target enum is the closed set every session could escalate TO', () => {
+    expect(ESCALATION_TARGETS).toEqual(['danger-full-access'])
   })
 })
 
@@ -44,7 +43,6 @@ describe('validateEscalationArgs', () => {
 
 describe('the model-facing markers', () => {
   it('the denial marker names the mode', () => {
-    expect(sandboxDenialMarker('read-only')).toBe('[sandbox: file access denied under read-only mode]')
     expect(sandboxDenialMarker('workspace-write')).toBe('[sandbox: file access denied under workspace-write mode]')
   })
 
@@ -56,9 +54,9 @@ describe('the model-facing markers', () => {
 
 describe('approveEscalation', () => {
   const req = (over: Partial<Parameters<typeof approveEscalation>[0]> = {}) => ({
-    requestedMode: 'workspace-write',
-    justification: 'the user asked to write in the workspace',
-    effectiveMode: 'read-only' as const,
+    requestedMode: 'danger-full-access',
+    justification: 'the user asked to write outside the workspace',
+    effectiveMode: 'workspace-write' as const,
     subject: 'command',
     ...over,
   })
@@ -77,16 +75,16 @@ describe('approveEscalation', () => {
   it('grants: returns the requested mode, asking through the approver with the audit reason', async () => {
     const seen: { reason?: string }[] = []
     const granted = await approveEscalation(req(), ingredients({ approver: approver('allowed-once', r => seen.push(r as { reason?: string })) }))
-    expect(granted).toBe('workspace-write')
-    expect(seen[0]?.reason).toBe('escalate sandbox to workspace-write: the user asked to write in the workspace')
+    expect(granted).toBe('danger-full-access')
+    expect(seen[0]?.reason).toBe('escalate sandbox to danger-full-access: the user asked to write outside the workspace')
   })
 
   it('a non-widening request fails closed with its own text and never asks', async () => {
     const seen: unknown[] = []
     const spy = ingredients({ approver: approver('allowed-once', r => seen.push(r)) })
-    await expect(approveEscalation(req({ requestedMode: 'read-only' }), spy))
-      .rejects.toThrow(/not strictly wider than this call's current "read-only" mode/)
-    await expect(approveEscalation(req({ requestedMode: 'workspace-write', effectiveMode: 'danger-full-access' as never }), spy))
+    await expect(approveEscalation(req({ requestedMode: 'workspace-write' }), spy))
+      .rejects.toThrow(/not strictly wider than this call's current "workspace-write" mode/)
+    await expect(approveEscalation(req({ effectiveMode: 'danger-full-access' as never }), spy))
       .rejects.toThrow(/not strictly wider/)
     expect(seen).toEqual([])
   })
@@ -98,9 +96,9 @@ describe('approveEscalation', () => {
 
   it('maps each non-grant outcome to its distinct verbatim text (subject in the rejection)', async () => {
     await expect(approveEscalation(req({ subject: 'operation' }), ingredients({ approver: approver('rejected') })))
-      .rejects.toThrow('the user rejected escalating this operation to "workspace-write"')
+      .rejects.toThrow('the user rejected escalating this operation to "danger-full-access"')
     await expect(approveEscalation(req(), ingredients({ approver: approver('cancelled') })))
-      .rejects.toThrow('approval for escalating to "workspace-write" was cancelled')
+      .rejects.toThrow('approval for escalating to "danger-full-access" was cancelled')
     await expect(approveEscalation(req(), ingredients({ approver: approver('unavailable') })))
       .rejects.toThrow('no approval channel is available')
   })

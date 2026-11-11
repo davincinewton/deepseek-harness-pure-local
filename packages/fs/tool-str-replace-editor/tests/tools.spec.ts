@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -64,7 +64,7 @@ function call(ctx: Context, owner: Agent | undefined, args: unknown) {
 
 async function setup(
   config: ToolStrReplaceEditor.Config = {},
-  options: { fsPolicy?: boolean; sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' } = {},
+  options: { fsPolicy?: boolean; sandboxMode?: 'workspace-write' | 'danger-full-access' } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-tool-str-replace-editor-'))
   roots.push(root)
@@ -481,19 +481,21 @@ describe('tool-str-replace-editor', () => {
   })
 
   it('passes the session sandbox policy to every mutation', async () => {
-    const { ctx, root, owner } = await setup({}, { sandboxMode: 'read-only' })
-    const path = join(root, 'blocked.txt')
+    // HOME-based paths are outside every workspace-write root (the workspace
+    // and the temp areas), so the fence denial is real, not a fixture accident.
+    const { ctx, owner } = await setup({}, { sandboxMode: 'workspace-write' })
+    const path = join(homedir(), 'dsh-str-replace-editor-blocked.txt')
     const result = await call(ctx, owner, {
       command: 'create',
       path,
       file_text: 'blocked',
     })
     expect(result.error).toMatchObject({ info: { code: 'FS_SANDBOX_DENIED' } })
-    expect(text(result)).toContain('[sandbox: file access denied under read-only mode]')
+    expect(text(result)).toContain('[sandbox: file access denied under workspace-write mode]')
 
     const ownerless = await call(ctx, undefined, {
       command: 'create',
-      path: join(root, 'ownerless-blocked.txt'),
+      path: join(homedir(), 'dsh-str-replace-editor-ownerless-blocked.txt'),
       file_text: 'blocked',
     })
     expect(ownerless.error).toMatchObject({ info: { code: 'FS_SANDBOX_DENIED' } })
@@ -534,7 +536,7 @@ describe('tool-str-replace-editor', () => {
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(LocalFileSystem, { cwd: root })
-    Object.defineProperty(ctx.fs, 'sandboxMode', { value: 'read-only' })
+    Object.defineProperty(ctx.fs, 'sandboxMode', { value: 'workspace-write' })
 
     await expect(ctx.plugin(ToolStrReplaceEditor))
       .rejects.toThrow('the mounted filesystem confines but ctx.sandboxPolicy is missing')

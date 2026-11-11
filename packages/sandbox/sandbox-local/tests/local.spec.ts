@@ -2,7 +2,8 @@
  * LocalSandboxProvider tests. No real runner is assumed to exist on the test
  * host: `runnerCommand` injects deterministic runner argvs, and `internals`
  * injects probe verdicts plus fake Landlock launcher / `sandbox-exec`
- * scripts, so profile dialects, ladder selection, verdict caching,
+ * scripts, so profile dialects, chain selection (probed solo Landlock rung,
+ * unprobed sole OS-shipped candidates, multi-rung walks), verdict caching,
  * probe-report parsing, per-rung denial signatures, and fail-closed behavior
  * are all exercised through the real `confine()` path.
  */
@@ -19,9 +20,8 @@ import {
   LocalSandboxProvider,
 } from '@deepseek-ai/dsh-sandbox-local'
 import type { Config } from '@deepseek-ai/dsh-sandbox-local'
-import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from '../src/profiles.ts'
+import { landlockProfileArgs, runnerCommandProfileArgs, seatbeltProfileArgs } from '../src/profiles.ts'
 
-const RO: SandboxPolicy = { mode: 'read-only', workspaceRoot: '/ws' }
 const WW: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: '/ws' }
 
 async function setup(config: Config = {}, internals: LocalSandboxProvider['internals'] = {}) {
@@ -58,36 +58,24 @@ function fakeSeatbeltExec(status: number): string {
   return exec
 }
 
-/** The seatbelt read-only profile — every seatbelt profile starts with these forms. */
-const SEATBELT_RO_PROFILE = '(version 1) (allow default) (deny file-write*) (allow file-write* (literal "/dev/null"))'
+/** The confined Seatbelt profile head — every confined profile starts with these forms. */
+const SEATBELT_BASE_PROFILE = '(version 1) (allow default) (deny file-write*) (allow file-write* (literal "/dev/null"))'
 
 describe('profile dialects', () => {
-  it('bwrap read-only: whole tree read-only with fresh /dev and /proc, no writable mounts', () => {
-    expect(bwrapProfileArgs(RO)).toEqual(['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent'])
-  })
-
-  it('bwrap workspace-write: adds an ephemeral /tmp and rebinds the workspace root', () => {
-    expect(bwrapProfileArgs(WW)).toEqual([
+  it('runnerCommand dialect: whole tree read-only with fresh /dev and /proc, an ephemeral /tmp, and the workspace rebound', () => {
+    expect(runnerCommandProfileArgs(WW)).toEqual([
       '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent',
       '--tmpfs', '/tmp', '--bind', '/ws', '/ws',
     ])
   })
 
-  it('landlock read-only: readable tree plus a writable /dev/null, nothing else', () => {
+  it('landlock: readable tree; writable /dev/null, the host /tmp, and the workspace root', () => {
     // /dev/null specifically, NOT /dev: a whole-/dev grant would let confined
-    // commands write real host paths beneath it (/dev/shm) under read-only.
-    expect(landlockProfileArgs(RO)).toEqual(['--ro', '/', '--rw', '/dev/null'])
-  })
-
-  it('landlock workspace-write: adds the host /tmp and the workspace root', () => {
+    // commands write real host paths beneath it (/dev/shm).
     expect(landlockProfileArgs(WW)).toEqual(['--ro', '/', '--rw', '/dev/null', '--rw', '/tmp', '--rw', '/ws'])
   })
 
-  it('seatbelt read-only: allow-default with every file write denied except the /dev/null literal', () => {
-    expect(seatbeltProfileArgs(RO)).toEqual(['-p', SEATBELT_RO_PROFILE])
-  })
-
-  it('seatbelt workspace-write: one more allow for the canonicalized workspace root, /tmp, and the user temp dir', () => {
+  it('seatbelt: allow-default with every file write denied except /dev/null and the canonicalized writable roots', () => {
     // `/ws` does not exist, so it is granted as spelled (the canonicalization
     // fallback); `/tmp` and `os.tmpdir()` exist everywhere and are granted
     // CANONICALIZED — Seatbelt matches resolved paths (`/tmp` IS
@@ -95,10 +83,10 @@ describe('profile dialects', () => {
     // where they resolve to the same directory.
     const roots = [...new Set(['/ws', realpathSync('/tmp'), realpathSync(tmpdir())])]
     const allow = `(allow file-write* ${roots.map(root => `(subpath "${root}")`).join(' ')})`
-    expect(seatbeltProfileArgs(WW)).toEqual(['-p', `${SEATBELT_RO_PROFILE} ${allow}`])
+    expect(seatbeltProfileArgs(WW)).toEqual(['-p', `${SEATBELT_BASE_PROFILE} ${allow}`])
   })
 
-  it('seatbelt workspace-write dedups a workspace root that already IS the temp dir', () => {
+  it('seatbelt dedups a workspace root that already IS the temp dir', () => {
     const profile = seatbeltProfileArgs({ mode: 'workspace-write', workspaceRoot: tmpdir() })[1] as string
     const grant = `(subpath "${realpathSync(tmpdir())}")`
     expect(profile).toContain(grant)
@@ -107,33 +95,31 @@ describe('profile dialects', () => {
 })
 
 describe('runnerCommand config', () => {
-  it('a non-empty runnerCommand skips the chain: runner argv + bwrap-shaped profile + -- + caller argv, asserted full', async () => {
-    const probeBwrap = vi.fn(() => false)
+  it('a non-empty runnerCommand skips the chain: runner argv + operator dialect + -- + caller argv, asserted full', async () => {
     const probeLandlock = vi.fn(() => 'unusable' as const)
     const probeSeatbelt = vi.fn(() => false)
     const { sandbox } = await setup({
       runnerCommand: ['fake-runner', '--flag'],
       runnerFailureSignatures: ['fake-runner: profile rejected'],
-    }, { probeBwrap, probeLandlock, probeSeatbelt })
+    }, { probeLandlock, probeSeatbelt })
     const confined = sandbox.confine(['bash', '-c', 'echo hi'], WW)
     expect(confined).toEqual({
-      argv: ['fake-runner', '--flag', ...bwrapProfileArgs(WW), '--', 'bash', '-c', 'echo hi'],
+      argv: ['fake-runner', '--flag', ...runnerCommandProfileArgs(WW), '--', 'bash', '-c', 'echo hi'],
       enforcement: 'full',
       // An operator runner's kernel mechanism is unknown: both Linux
       // file-denial dialects, never bare EPERM.
       denialSignatures: ['read-only file system', 'permission denied'],
       runnerFailureRules: [{ fatalSignatures: ['fake-runner: profile rejected'] }],
     })
-    expect(probeBwrap).not.toHaveBeenCalled()
     expect(probeLandlock).not.toHaveBeenCalled()
     expect(probeSeatbelt).not.toHaveBeenCalled()
   })
 
   it('an EMPTY runnerCommand means unconfigured: the platform chain still gates the wrap', async () => {
-    const probeBwrap = vi.fn(() => false)
-    const { sandbox } = await setup({ runnerCommand: [] }, { platform: 'linux', probeBwrap, probeLandlock: () => 'unusable' })
-    expect(() => sandbox.confine(['true'], RO)).toThrow(SandboxUnavailableError)
-    expect(probeBwrap).toHaveBeenCalledTimes(1)
+    const probeLandlock = vi.fn(() => 'unusable' as const)
+    const { sandbox } = await setup({ runnerCommand: [] }, { platform: 'linux', probeLandlock })
+    expect(() => sandbox.confine(['true'], WW)).toThrow(SandboxUnavailableError)
+    expect(probeLandlock).toHaveBeenCalledTimes(1)
   })
 
   it('requires an operator-owned failure dialect for every configured runner', async () => {
@@ -159,25 +145,10 @@ describe('runnerCommand config', () => {
 })
 
 describe('the platform chains', () => {
-  it('linux probes bwrap first: a passing probe wraps with the bwrap dialect at full enforcement', async () => {
-    const probeBwrap = vi.fn(() => true)
-    const probeLandlock = vi.fn(() => 'full' as const)
-    const { sandbox } = await setup({}, { platform: 'linux', probeBwrap, probeLandlock })
-    const confined = sandbox.confine(['true'], RO)
-    expect(confined).toEqual({
-      argv: ['bwrap', ...bwrapProfileArgs(RO), '--', 'true'],
-      enforcement: 'full',
-      denialSignatures: ['read-only file system'],
-      runnerFailureRules: [{ fatalSignatures: ['bwrap: '] }],
-    })
-    expect(probeLandlock).not.toHaveBeenCalled()
-  })
-
-  it('linux falls back to the launcher when the bwrap probe fails, speaking the landlock dialect', async () => {
-    const probeBwrap = vi.fn(() => false)
-    const probeLandlock = vi.fn(() => 'full' as const)
+  it('linux probes its SOLO Landlock rung (the launcher may be absent): a passing probe wraps at the probe report\'s enforcement', async () => {
     const launcher = fakeLauncher()
-    const { sandbox } = await setup({}, { platform: 'linux', probeBwrap, probeLandlock, landlockLauncher: launcher })
+    const probeLandlock = vi.fn(() => 'full' as const)
+    const { sandbox } = await setup({}, { platform: 'linux', probeLandlock, landlockLauncher: launcher })
     const confined = sandbox.confine(['bash', '-c', 'echo hi'], WW)
     expect(confined).toEqual({
       argv: [launcher, ...landlockProfileArgs(WW), '--', 'bash', '-c', 'echo hi'],
@@ -198,9 +169,9 @@ describe('the platform chains', () => {
     // the consumer classify that as a sandbox failure, not a task failure.
     const probeSeatbelt = vi.fn(() => true)
     const { sandbox } = await setup({}, { platform: 'darwin', probeSeatbelt })
-    const confined = sandbox.confine(['bash', '-c', 'echo hi'], RO)
+    const confined = sandbox.confine(['bash', '-c', 'echo hi'], WW)
     expect(confined).toEqual({
-      argv: ['sandbox-exec', ...seatbeltProfileArgs(RO), '--', 'bash', '-c', 'echo hi'],
+      argv: ['sandbox-exec', ...seatbeltProfileArgs(WW), '--', 'bash', '-c', 'echo hi'],
       enforcement: 'full',
       denialSignatures: ['operation not permitted'],
       runnerFailureRules: [{ fatalSignatures: ['sandbox-exec: '] }],
@@ -209,12 +180,10 @@ describe('the platform chains', () => {
   })
 
   it('a platform with no chain fails closed without a single probe: the command never runs', async () => {
-    const probeBwrap = vi.fn(() => true)
     const probeLandlock = vi.fn(() => 'full' as const)
     const probeSeatbelt = vi.fn(() => true)
-    const { sandbox } = await setup({}, { platform: 'freebsd', probeBwrap, probeLandlock, probeSeatbelt })
-    expect(() => sandbox.confine(['true'], RO)).toThrow(expect.objectContaining({ name: 'SandboxUnavailableError', code: SANDBOX_UNAVAILABLE }))
-    expect(probeBwrap).not.toHaveBeenCalled()
+    const { sandbox } = await setup({}, { platform: 'freebsd', probeLandlock, probeSeatbelt })
+    expect(() => sandbox.confine(['true'], WW)).toThrow(expect.objectContaining({ name: 'SandboxUnavailableError', code: SANDBOX_UNAVAILABLE }))
     expect(probeLandlock).not.toHaveBeenCalled()
     expect(probeSeatbelt).not.toHaveBeenCalled()
   })
@@ -225,20 +194,18 @@ describe('the platform chains', () => {
   // Windows where this package's POSIX-only suites are excluded).
 
   it('caches the verdict for the provider lifetime: one chain walk across wraps', async () => {
-    const probeBwrap = vi.fn(() => true)
-    const { sandbox } = await setup({}, { platform: 'linux', probeBwrap })
-    sandbox.confine(['true'], RO)
+    const probeLandlock = vi.fn(() => 'full' as const)
+    const { sandbox } = await setup({}, { platform: 'linux', probeLandlock })
     sandbox.confine(['true'], WW)
-    expect(probeBwrap).toHaveBeenCalledTimes(1)
+    sandbox.confine(['true'], WW)
+    expect(probeLandlock).toHaveBeenCalledTimes(1)
   })
 
   it('the unavailable verdict is cached too, and the error is structured', async () => {
-    const probeBwrap = vi.fn(() => false)
     const probeLandlock = vi.fn(() => 'unusable' as const)
-    const { sandbox } = await setup({}, { platform: 'linux', probeBwrap, probeLandlock })
-    expect(() => sandbox.confine(['true'], RO)).toThrow(expect.objectContaining({ name: 'SandboxUnavailableError', code: SANDBOX_UNAVAILABLE }))
-    expect(() => sandbox.confine(['true'], RO)).toThrow(SandboxUnavailableError)
-    expect(probeBwrap).toHaveBeenCalledTimes(1)
+    const { sandbox } = await setup({}, { platform: 'linux', probeLandlock })
+    expect(() => sandbox.confine(['true'], WW)).toThrow(expect.objectContaining({ name: 'SandboxUnavailableError', code: SANDBOX_UNAVAILABLE }))
+    expect(() => sandbox.confine(['true'], WW)).toThrow(SandboxUnavailableError)
     expect(probeLandlock).toHaveBeenCalledTimes(1)
   })
 
@@ -247,19 +214,17 @@ describe('the platform chains', () => {
     // candidate; the probe chain exercises the path it would take in
     // a grown chain, keeping the default seatbelt probe honest.
     const exec = fakeSeatbeltExec(0)
-    const probeBwrap = vi.fn(() => false)
-    const { sandbox } = await setup({}, { chain: ['bwrap', 'seatbelt'], probeBwrap, seatbeltExec: exec })
-    const confined = sandbox.confine(['true'], RO)
+    const { sandbox } = await setup({}, { chain: ['seatbelt', 'landlock'], seatbeltExec: exec })
+    const confined = sandbox.confine(['true'], WW)
     expect(confined.argv[0]).toBe(exec)
     expect(confined.enforcement).toBe('full')
-    expect(probeBwrap).toHaveBeenCalledTimes(1)
   })
 
   it('a rogue chain entry throws via the probe walk\'s exhaustiveness guard (closed union)', async () => {
     // Same convention as the wrap switch below: the union is closed, so a runner added later
     // fails to compile at the probe switch instead of silently selecting without a probe.
-    const { sandbox } = await setup({}, { chain: ['chroot', 'bwrap'] as unknown as readonly ['bwrap'] })
-    expect(() => sandbox.confine(['true'], RO)).toThrow('unreachable variant')
+    const { sandbox } = await setup({}, { chain: ['chroot', 'landlock'] as unknown as readonly ['landlock'] })
+    expect(() => sandbox.confine(['true'], WW)).toThrow('unreachable variant')
   })
 
   it('a rogue cached runner tag throws via the exhaustiveness guard (closed union)', async () => {
@@ -267,17 +232,19 @@ describe('the platform chains', () => {
     // runner cannot silently use another runner's wrap or denial dialect.
     const { sandbox } = await setup()
     ;(sandbox as unknown as { selectedRunner: unknown }).selectedRunner = { runner: 'chroot', enforcement: 'full' }
-    expect(() => sandbox.confine(['true'], RO)).toThrow('unreachable variant')
+    expect(() => sandbox.confine(['true'], WW)).toThrow('unreachable variant')
   })
 
-  it('runs the real default probes on the linux chain when none are injected (usable here or fail closed there)', async () => {
-    // Pinning the platform (not the probes) makes the REAL defaultProbeBwrap
-    // spawn run on every host: bwrap answers on a Linux box, ENOENT reads as
-    // an unusable rung anywhere else — either way the walk is genuine.
+  it('runs the real default landlock probe on the linux chain when none is injected (usable here or fail closed there)', async () => {
+    // Pinning the platform (not the probes) makes the REAL launcher probe run
+    // on every host: a built launcher answers on a Landlock box, a missing
+    // one reads as an unusable rung anywhere else — either way the walk is
+    // genuine, and an unusable solo rung fails closed (never silent
+    // degradation).
     const { sandbox } = await setup({}, { platform: 'linux' })
     const verdict = (() => {
       try {
-        sandbox.confine(['true'], RO)
+        sandbox.confine(['true'], WW)
         return 'usable'
       } catch (error: unknown) {
         if (error instanceof SandboxUnavailableError) return 'unavailable'
@@ -291,7 +258,7 @@ describe('the platform chains', () => {
     const { sandbox } = await setup({}, {})
     const verdict = (() => {
       try {
-        sandbox.confine(['true'], RO)
+        sandbox.confine(['true'], WW)
         return 'usable'
       } catch (error: unknown) {
         if (error instanceof SandboxUnavailableError) return 'unavailable'
@@ -304,22 +271,22 @@ describe('the platform chains', () => {
 
 describe('the default landlock probe (launcher CLI contract)', () => {
   it('parses a fully-enforced probe report as full enforcement', async () => {
-    const { sandbox } = await setup({}, { platform: 'linux', probeBwrap: () => false, landlockLauncher: fakeLauncher() })
-    expect(sandbox.confine(['true'], RO).enforcement).toBe('full')
+    const { sandbox } = await setup({}, { platform: 'linux', landlockLauncher: fakeLauncher() })
+    expect(sandbox.confine(['true'], WW).enforcement).toBe('full')
   })
 
   it('parses a partially-enforced (older-ABI) probe report as partial enforcement', async () => {
     const launcher = fakeLauncher('landlock: partially enforced (older ABI)')
-    const { sandbox } = await setup({}, { platform: 'linux', probeBwrap: () => false, landlockLauncher: launcher })
-    expect(sandbox.confine(['true'], RO).enforcement).toBe('partial')
+    const { sandbox } = await setup({}, { platform: 'linux', landlockLauncher: launcher })
+    expect(sandbox.confine(['true'], WW).enforcement).toBe('partial')
   })
 
   it('reads a failing launcher as unusable: the chain ends and fails closed', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-fake-landlock-'))
     const launcher = join(dir, 'landlock-run')
     writeFileSync(launcher, `#!/bin/sh\nexit ${LAUNCHER_FAILURE_EXIT}\n`, { mode: 0o755 })
-    const { sandbox } = await setup({}, { platform: 'linux', probeBwrap: () => false, landlockLauncher: launcher })
-    expect(() => sandbox.confine(['true'], RO)).toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
+    const { sandbox } = await setup({}, { platform: 'linux', landlockLauncher: launcher })
+    expect(() => sandbox.confine(['true'], WW)).toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
   })
 })
 
@@ -342,15 +309,15 @@ describe('probeTimeoutMs config', () => {
 
     const patient = await setup(
       { probeTimeoutMs: 15_000 },
-      { platform: 'linux', probeBwrap: () => false, landlockLauncher: launcher },
+      { platform: 'linux', landlockLauncher: launcher },
     )
-    expect(patient.sandbox.confine(['true'], RO).enforcement).toBe('full')
+    expect(patient.sandbox.confine(['true'], WW).enforcement).toBe('full')
 
     const impatient = await setup(
       { probeTimeoutMs: 250 },
-      { platform: 'linux', probeBwrap: () => false, landlockLauncher: launcher },
+      { platform: 'linux', landlockLauncher: launcher },
     )
-    expect(() => impatient.sandbox.confine(['true'], RO)).toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
+    expect(() => impatient.sandbox.confine(['true'], WW)).toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
   }, 30_000)
 })
 
@@ -358,21 +325,23 @@ describe('the default seatbelt probe (sandbox-exec contract)', () => {
   // The product chains reach seatbelt only unprobed (darwin's sole
   // candidate), so the default probe's contract is pinned through the provider
   // chain: a grown chain must probe it like any other rung.
-  it('selects the rung when the executable applies the read-only profile and exits 0', async () => {
+  it('selects the rung when the executable applies the confined profile and exits 0', async () => {
     const exec = fakeSeatbeltExec(0)
-    const { sandbox } = await setup({}, { chain: ['bwrap', 'seatbelt'], probeBwrap: () => false, seatbeltExec: exec })
-    const confined = sandbox.confine(['true'], RO)
+    const { sandbox } = await setup({}, { chain: ['seatbelt', 'landlock'], seatbeltExec: exec })
+    const confined = sandbox.confine(['true'], WW)
     expect(confined).toEqual({
-      argv: [exec, ...seatbeltProfileArgs(RO), '--', 'true'],
+      argv: [exec, ...seatbeltProfileArgs(WW), '--', 'true'],
       enforcement: 'full',
       denialSignatures: ['operation not permitted'],
       runnerFailureRules: [{ fatalSignatures: ['sandbox-exec: '] }],
     })
   })
 
-  it('reads a failing executable as unusable: the chain ends and fails closed', async () => {
-    const { sandbox } = await setup({}, { chain: ['bwrap', 'seatbelt'], probeBwrap: () => false, seatbeltExec: fakeSeatbeltExec(1) })
-    expect(() => sandbox.confine(['true'], RO)).toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
+  it('reads a failing executable as unusable: the chain falls to the next rung', async () => {
+    const launcher = fakeLauncher()
+    const { sandbox } = await setup({}, { chain: ['seatbelt', 'landlock'], seatbeltExec: fakeSeatbeltExec(1), landlockLauncher: launcher })
+    const confined = sandbox.confine(['true'], WW)
+    expect(confined.argv[0]).toBe(launcher)
   })
 })
 
@@ -383,14 +352,13 @@ describe('the windows-acl probe (runner invocation contract)', () => {
   it('selects the rung when the injected probe passes, speaking the ACL dialect', async () => {
     const probeWindowsAcl = vi.fn(() => true)
     const { sandbox } = await setup({}, {
-      chain: ['windows-acl', 'bwrap'],
+      chain: ['windows-acl', 'landlock'],
       probeWindowsAcl,
-      probeBwrap: () => false,
       windowsAclRunnerArgs: ['node', 'windows-acl-runner.js'],
     })
-    const confined = sandbox.confine(['true'], RO)
+    const confined = sandbox.confine(['true'], WW)
     expect(probeWindowsAcl).toHaveBeenCalledTimes(1)
-    expect(confined.argv.slice(-4)).toEqual(['--mode', 'read-only', '--', 'true'])
+    expect(confined.argv.slice(-2)).toEqual(['--', 'true'])
     expect(confined.enforcement).toBe('partial')
     expect(confined.denialSignatures).toEqual(['access is denied', 'access to the path', 'permission denied'])
     expect(confined.runnerFailureRules).toEqual([{ allowedExitCodes: [127], fatalSignatures: ['windows-acl-run: '] }])
@@ -398,9 +366,10 @@ describe('the windows-acl probe (runner invocation contract)', () => {
 
   it('reads a failing probe as unusable and walks to the next rung', async () => {
     const probeWindowsAcl = vi.fn(() => false)
-    const { sandbox } = await setup({}, { chain: ['windows-acl', 'bwrap'], probeWindowsAcl, probeBwrap: () => true })
-    const confined = sandbox.confine(['true'], RO)
-    expect(confined.argv[0]).toBe('bwrap')
+    const launcher = fakeLauncher()
+    const { sandbox } = await setup({}, { chain: ['windows-acl', 'landlock'], probeWindowsAcl, landlockLauncher: launcher })
+    const confined = sandbox.confine(['true'], WW)
+    expect(confined.argv[0]).toBe(launcher)
     expect(probeWindowsAcl).toHaveBeenCalledTimes(1)
   })
 
@@ -410,10 +379,11 @@ describe('the windows-acl probe (runner invocation contract)', () => {
     // on whether the checkout has run build:lib:host (which emits
     // sandbox-windows-acl/lib/runner.js), so this asserts only what holds
     // either way — the runner cannot init off win32, so the probe reads
-    // unusable and the walk falls through to the injected bwrap verdict.
-    const { sandbox } = await setup({}, { chain: ['windows-acl', 'bwrap'], probeBwrap: () => true })
-    const confined = sandbox.confine(['true'], RO)
-    expect(confined.argv[0]).toBe('bwrap')
+    // unusable and the walk falls through to the landlock rung.
+    const launcher = fakeLauncher()
+    const { sandbox } = await setup({}, { chain: ['windows-acl', 'landlock'], landlockLauncher: launcher })
+    const confined = sandbox.confine(['true'], WW)
+    expect(confined.argv[0]).toBe(launcher)
   }, 30_000)
 
   it('falls back to the runner source through tsx when the built entry is absent', async () => {
@@ -421,11 +391,11 @@ describe('the windows-acl probe (runner invocation contract)', () => {
     // state: on a checkout where build:lib:host has run, the real resolution
     // above takes the built-entry arm instead and would leave this uncovered.
     const { sandbox } = await setup({}, {
-      chain: ['windows-acl', 'bwrap'],
+      chain: ['windows-acl', 'landlock'],
       probeWindowsAcl: () => true,
       windowsAclRunnerEntry: absentRunnerEntry(),
     })
-    const confined = sandbox.confine(['true'], RO)
+    const confined = sandbox.confine(['true'], WW)
     expect(confined.argv.slice(0, 3)).toEqual([process.execPath, '--import', 'tsx/esm'])
     expect(confined.argv[3]).toMatch(/runner\.ts$/)
   })
@@ -433,9 +403,10 @@ describe('the windows-acl probe (runner invocation contract)', () => {
   it('reads an empty runner invocation as unusable (the probe\'s empty-argv guard)', async () => {
     // windowsAclRunnerInvocation always yields [node, ...] in product; an
     // override returning [] exercises the default probe's empty-argv guard.
-    const { sandbox } = await setup({}, { chain: ['windows-acl', 'bwrap'], probeBwrap: () => true, windowsAclRunnerArgs: [] })
-    const confined = sandbox.confine(['true'], RO)
-    expect(confined.argv[0]).toBe('bwrap')
+    const launcher = fakeLauncher()
+    const { sandbox } = await setup({}, { chain: ['windows-acl', 'landlock'], windowsAclRunnerArgs: [], landlockLauncher: launcher })
+    const confined = sandbox.confine(['true'], WW)
+    expect(confined.argv[0]).toBe(launcher)
   })
 
   it('prefers the built lib/runner.js entry when the resolved file exists', async () => {
@@ -443,11 +414,11 @@ describe('the windows-acl probe (runner invocation contract)', () => {
     const builtEntry = join(dir, 'runner.js')
     writeFileSync(builtEntry, '')
     const { sandbox } = await setup({}, {
-      chain: ['windows-acl', 'bwrap'],
+      chain: ['windows-acl', 'landlock'],
       probeWindowsAcl: () => true,
       windowsAclRunnerEntry: builtEntry,
     })
-    const confined = sandbox.confine(['true'], RO)
+    const confined = sandbox.confine(['true'], WW)
     expect(confined.argv.slice(0, 2)).toEqual([process.execPath, builtEntry])
   })
 })

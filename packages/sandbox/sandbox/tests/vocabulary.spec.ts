@@ -11,7 +11,7 @@ import { SANDBOX_UNAVAILABLE, SandboxUnavailableError } from '@deepseek-ai/dsh-s
 
 describe('SandboxUnavailableError', () => {
   it('carries the structured { name, code } identity consumers key on', () => {
-    const error = new SandboxUnavailableError('read-only')
+    const error = new SandboxUnavailableError('workspace-write')
     expect(error.name).toBe('SandboxUnavailableError')
     expect(error.code).toBe(SANDBOX_UNAVAILABLE)
     expect(error).toBeInstanceOf(Error)
@@ -20,7 +20,8 @@ describe('SandboxUnavailableError', () => {
   it('names the refused mode and the operator escape hatches in its message', () => {
     const error = new SandboxUnavailableError('workspace-write')
     expect(error.message).toContain('"workspace-write"')
-    expect(error.message).toContain('danger-full-access')
+    expect(error.message).toContain('full access in the permission controls')
+    expect(error.message).toContain('Do not work around this denial')
     expect(error.message).not.toContain('Runner failure')
   })
 
@@ -28,7 +29,7 @@ describe('SandboxUnavailableError', () => {
     // The late twin of the confine-time throw: an unprobed sole candidate
     // that fails closed at exec surfaces the SAME error, with the runner's
     // own first stderr line as the cause.
-    const error = new SandboxUnavailableError('read-only', 'landlock-run: landlock is not enforced by this kernel')
+    const error = new SandboxUnavailableError('workspace-write', 'landlock-run: landlock is not enforced by this kernel')
     expect(error.code).toBe(SANDBOX_UNAVAILABLE)
     expect(error.message).toContain('Runner failure: landlock-run: landlock is not enforced by this kernel')
   })

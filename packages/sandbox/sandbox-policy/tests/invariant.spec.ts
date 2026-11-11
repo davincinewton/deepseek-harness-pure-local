@@ -17,13 +17,19 @@ function modeEvent(mode: string): SessionEvent {
 }
 
 describe('sandbox-policy invariants', () => {
-  it.each(['read-only', 'workspace-write', 'danger-full-access'])(
+  it.each(['workspace-write', 'danger-full-access'])(
     'accepts the durable %s mode',
     async (mode) => {
       const ctx = await setup()
       expect(() => { ctx.emit('session/event', {} as Session, modeEvent(mode)) }).not.toThrow()
     },
   )
+
+  it('rejects the removed read-only mode as unknown vocabulary', async () => {
+    const ctx = await setup()
+    expect(() => { ctx.emit('session/event', {} as Session, modeEvent('read-only')) })
+      .toThrow(new InvariantError('@deepseek-ai/dsh-sandbox-policy', 'sandbox/mode carries unknown mode "read-only"'))
+  })
 
   it('ignores unrelated event streams', async () => {
     const ctx = await setup()

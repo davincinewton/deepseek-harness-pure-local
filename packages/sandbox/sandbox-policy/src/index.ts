@@ -37,8 +37,6 @@ function resolveWorkspaceRoot(path: string): string {
 /** Render the policy without claiming which capabilities are mounted. */
 function renderPolicyContext(policy: SandboxExecutionPolicy): string {
   switch (policy.mode) {
-    case 'read-only':
-      return 'Current DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.'
     case 'workspace-write':
       return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`
     case 'danger-full-access':
@@ -59,13 +57,13 @@ declare module '@deepseek-ai/cordis' {
 
 /**
  * Plugin config: the deployment's sandbox default. All optional — `Config`
- * supplies the defaults (`mode: 'read-only'` is the fail-safe default; a
- * deployment that wants a workspace-writable agent opts in explicitly). The
- * runner choice is NOT here (it is the `ctx.sandbox` provider's config), nor
- * is any per-family knob: this is the one shared policy home.
+ * supplies the defaults (`mode: 'workspace-write'` — Mode A, the confinement
+ * the two-mode design starts every session in). The runner choice is NOT here
+ * (it is the `ctx.sandbox` provider's config), nor is any per-family knob:
+ * this is the one shared policy home.
  */
 export interface Config {
-  /** File-sandbox mode a session starts from (default: `read-only`). */
+  /** File-sandbox mode a session starts from (default: `workspace-write`). */
   mode?: SandboxMode
   /**
    * Fallback root for agentless calls and sessions without a cwd (default:
@@ -91,7 +89,7 @@ export interface SandboxPolicyRequest {
 export class SandboxPolicyService extends Service {
   // Inline schema call: the config catalog walks `static Config` statically.
   static Config: z<Config> = z.object({
-    mode: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const).default('read-only'),
+    mode: z.union(['workspace-write', 'danger-full-access'] as const).default('workspace-write'),
     // No schema default: process.cwd() is resolved in the constructor so the
     // stored root is always absolute regardless of how it was supplied.
     workspaceRoot: z.string(),

@@ -63,17 +63,16 @@ export interface AclSandboxOptions {
   /** Directories the confined child may write into (must exist and be caller-owned). */
   writableDirs: readonly string[]
   /**
-   * Existing private temp directory to grant. Workspace-write callers must
-   * pass it explicitly or pass null to disable temp writes; the ambient temp
-   * root is never an implicit grant. Read-only accepts only null/undefined.
+   * Existing private temp directory to grant, or null to disable temp
+   * writes; required explicitly — the ambient temp root is never an implicit
+   * grant.
    */
   tempDir?: string | null
   /**
-   * The write SID forming the workspace-write allowlist: REQUIRED under
-   * workspace-write, ignored (and must be absent) under read-only. Callers
-   * derive it from the workspace via {@link workspaceWriteSid} — the identity
-   * is per workspace, not per sandbox instance, so the workspace-root ACE
-   * outlives every instance and later provisions hit the exact-ACE skip.
+   * The write SID forming the workspace allowlist. Required. Callers derive
+   * it from the workspace via {@link workspaceWriteSid} — the identity is per
+   * workspace, not per sandbox instance, so the workspace-root ACE outlives
+   * every instance and later provisions hit the exact-ACE skip.
    */
   writeSid?: string
   /**
@@ -83,14 +82,6 @@ export interface AclSandboxOptions {
    * cannot use the standing workspace capability in one another's temp tree.
    */
   tempWriteSid?: string
-  /**
-   * The file-effect mode this instance confines under — selects the
-   * restricted token's restricting-SID list (I for read-only, J for
-   * workspace-write) and MUST match the grant shape: read-only pairs with
-   * zero grants. The runner validates the argv-borne mode string at its
-   * boundary; this typed seam trusts the union.
-   */
-  mode: 'read-only' | 'workspace-write'
   /**
    * Whether this instance owns its DACL grants (default true). False means
    * the CALLER has already materialized the ACEs (the sandbox seam's
@@ -164,8 +155,6 @@ export class AclSandbox {
   readonly writeSid: string | undefined
   /** The private temp directory's write SID (workspace-write with temp only). */
   readonly tempWriteSid: string | undefined
-  /** The file-effect mode — the restricted token's restricting-SID list selection. */
-  readonly mode: 'read-only' | 'workspace-write'
   private readonly tempDirOption: string | null | undefined
   private readonly manageDacls: boolean
   private tempDirResolved: string | null | undefined
@@ -178,7 +167,6 @@ export class AclSandbox {
   private grantedPaths: Array<{ path: string; sidPtr: NativePtr }> = []
 
   constructor(options: AclSandboxOptions) {
-    this.mode = options.mode
     this.manageDacls = options.manageDacls ?? true
     this.writableDirs = options.writableDirs.map((directory) => {
       const absolute = resolve(directory)
@@ -190,20 +178,14 @@ export class AclSandbox {
     this.tempDirOption = options.tempDir
     this.writeSid = options.writeSid
     this.tempWriteSid = options.tempWriteSid
-    if (this.mode === 'workspace-write' && this.writeSid === undefined) {
-      throw new Error('AclSandbox workspace-write requires a write SID — derive it from the workspace via workspaceWriteSid()')
+    if (this.writeSid === undefined) {
+      throw new Error('AclSandbox requires a write SID — derive it from the workspace via workspaceWriteSid()')
     }
-    if (this.mode === 'workspace-write' && this.tempDirOption === undefined) {
-      throw new Error('AclSandbox workspace-write requires an explicit private temp directory or null')
+    if (this.tempDirOption === undefined) {
+      throw new Error('AclSandbox requires an explicit private temp directory or null')
     }
-    if (this.mode === 'read-only' && this.tempDirOption !== undefined && this.tempDirOption !== null) {
-      throw new Error('AclSandbox read-only does not accept a temp directory')
-    }
-    if (this.mode === 'read-only' && (this.writeSid !== undefined || this.tempWriteSid !== undefined)) {
-      throw new Error('AclSandbox read-only does not accept write SIDs')
-    }
-    if (this.mode === 'workspace-write' && this.tempDirOption !== null && this.tempWriteSid === undefined) {
-      throw new Error('AclSandbox workspace-write with temp requires a temp write SID — derive it via tempWriteSid()')
+    if (this.tempDirOption !== null && this.tempWriteSid === undefined) {
+      throw new Error('AclSandbox with a temp directory requires a temp write SID — derive it via tempWriteSid()')
     }
     if (this.tempDirOption === null && this.tempWriteSid !== undefined) {
       throw new Error('AclSandbox temp write SID requires a temp directory')
@@ -238,10 +220,10 @@ export class AclSandbox {
       this.writeSidPtr = this.writeSid === undefined ? undefined : parseSid(this.writeSid)
       this.tempWriteSidPtr = this.tempWriteSid === undefined ? undefined : parseSid(this.tempWriteSid)
 
-      const tempDir = this.mode === 'read-only' || this.tempDirOption === null ? null : this.tempDirOption
-      /* v8 ignore next -- constructor validation requires workspace-write to supply
-         an explicit temp directory or null; the other branches normalize to null. */
-      if (tempDir === undefined) throw new Error('AclSandbox workspace-write temp directory was not resolved')
+      const tempDir = this.tempDirOption
+      /* v8 ignore next -- constructor validation requires an explicit temp
+         directory or null; this guard only pins that fact for the type checker. */
+      if (tempDir === undefined) throw new Error('AclSandbox temp directory was not resolved')
       if (tempDir !== null) {
         if (!existsSync(tempDir) || !statSync(tempDir).isDirectory()) {
           throw new Error(`AclSandbox temp dir does not exist or is not a directory: ${tempDir}`)
@@ -279,7 +261,6 @@ export class AclSandbox {
       restrictedToken = createRestrictedToken(
         api, currentToken, logonSid, writeSids,
         { world: worldSid },
-        this.mode,
       )
       this.token = restrictedToken
       // The restricted token's default DACL still names only the user's
@@ -289,7 +270,7 @@ export class AclSandbox {
       // pipe creation (ERROR_ACCESS_DENIED; Node EPERM) and break every
       // piped-stdio grandchild spawn. Merge a full-access ACE for a
       // restricting SID (the PRIVATE temp SID when present, otherwise the
-      // workspace SID, or Everyone under read-only): new-object creation
+      // workspace SID): new-object creation
       // stays gated by the parent object's DACL, while the new object's own
       // DACL passes pass-2. Choosing the temp SID prevents default-DACL
       // objects in one session's temp tree from acquiring the shared

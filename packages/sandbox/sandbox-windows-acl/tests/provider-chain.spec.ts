@@ -13,7 +13,6 @@ import { Context } from '@deepseek-ai/cordis'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
 
-const RO: SandboxPolicy = { mode: 'read-only', workspaceRoot: '/ws' }
 const WW: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: '/ws' }
 
 async function setup(internals: LocalSandboxProvider['internals']) {
@@ -25,7 +24,7 @@ async function setup(internals: LocalSandboxProvider['internals']) {
 }
 
 describe('windows-acl win32 chain (LocalSandboxProvider)', () => {
-  it('agentless workspace-write: runner argv prefix, temp root, mode flag, partial enforcement, ACL denial dialect', async () => {
+  it('agentless confined wrap: runner argv prefix, temp root, partial enforcement, ACL denial dialect', async () => {
     const probeWindowsAcl = vi.fn(() => true)
     const sandbox = await setup({
       platform: 'win32',
@@ -37,7 +36,6 @@ describe('windows-acl win32 chain (LocalSandboxProvider)', () => {
       'node', 'windows-acl-runner.js',
       '--workspace', '/ws',
       '--temp', tmpdir(),
-      '--mode', 'workspace-write',
       '--',
       'pwsh', '/Command', 'x',
     ])
@@ -50,8 +48,8 @@ describe('windows-acl win32 chain (LocalSandboxProvider)', () => {
 
   it('read-only: same runner and contract, read-only mode flag', async () => {
     const sandbox = await setup({ platform: 'win32', windowsAclRunnerArgs: ['node', 'windows-acl-runner.js'] })
-    const confined = sandbox.confine(['true'], RO)
-    expect(confined.argv.slice(-4)).toEqual(['--mode', 'read-only', '--', 'true'])
+    const confined = sandbox.confine(['true'], WW)
+    expect(confined.argv.slice(-2)).toEqual(['--', 'true'])
     expect(confined.enforcement).toBe('partial')
     expect(confined.runnerFailureRules).toEqual([{ allowedExitCodes: [127], fatalSignatures: ['windows-acl-run: '] }])
   })

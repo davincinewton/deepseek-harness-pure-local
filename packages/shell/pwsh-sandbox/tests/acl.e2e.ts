@@ -60,7 +60,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('pwsh-sandbox real ACL confinement
   })
 
   it('read-only: ordinary path writes denied, reads fine, partial and denial facts ride the result', async () => {
-    const policy: SandboxExecutionPolicy = { mode: 'read-only', workspaceRoot: writableDir }
+    const policy: SandboxExecutionPolicy = { mode: 'workspace-write', workspaceRoot: writableDir }
     const probe = [
       "$ErrorActionPreference='SilentlyContinue';",
       `try{Set-Content -Path '${writableDir}\\ro-write.txt' -Value ok -ErrorAction Stop;'TARGET-WRITE: OK'}catch{'TARGET-WRITE: DENIED'};`,
@@ -76,7 +76,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('pwsh-sandbox real ACL confinement
     expect(result.stdout.text).toContain('SECRET-READ: OK')
     expect(existsSync(join(writableDir, 'ro-write.txt'))).toBe(false)
     // A self-caught denial keeps the command exit 0: no denial fact.
-    expect(result.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'partial' })
+    expect(result.sandbox).toEqual({ mode: 'workspace-write', denied: false, enforcement: 'partial' })
 
     // A raw failing write must classify as a denial of the ACL dialect.
     const denied = await executor.run(executor.resolve({
@@ -84,7 +84,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('pwsh-sandbox real ACL confinement
       sandboxPolicy: policy,
     }))
     expect(denied.exitCode).not.toBe(0)
-    expect(denied.sandbox).toEqual({ mode: 'read-only', denied: true, enforcement: 'partial' })
+    expect(denied.sandbox).toEqual({ mode: 'workspace-write', denied: true, enforcement: 'partial' })
   }, 60_000)
 
   it('workspace-write: workspace and private temp writable, ambient temp and escape denied', async () => {

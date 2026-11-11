@@ -23,8 +23,8 @@ describe('canonicalPath', () => {
 })
 
 describe('writableRoots', () => {
-  it('read-only grants nothing', () => {
-    expect(writableRoots({ mode: 'read-only', workspaceRoot: process.cwd() })).toEqual([])
+  it('danger-full-access fences nothing at all (the allow-list is not consulted)', () => {
+    expect(writableRoots({ mode: 'danger-full-access', workspaceRoot: process.cwd() })).toEqual([])
   })
 
   it('workspace-write grants the workspace root plus the platform temp areas, canonical and deduplicated', () => {

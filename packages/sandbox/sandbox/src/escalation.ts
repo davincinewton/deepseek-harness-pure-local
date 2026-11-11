@@ -26,19 +26,18 @@ import type { SandboxMode } from './index.ts'
  * registry-global while the effective mode is per-call truth.
  */
 export const WIDER_MODES: Record<string, readonly SandboxMode[]> = {
-  'read-only': ['workspace-write', 'danger-full-access'],
   'workspace-write': ['danger-full-access'],
 }
 
 /**
  * The closed escalation-target vocabulary — every mode a call could ever
- * escalate TO (`read-only` is the floor; nothing escalates to it). Advertised
+ * escalate TO (with two modes, full access is the only widening). Advertised
  * whenever the mounted capability confines: cutting the enum down to the modes
  * wider than the composition's DEFAULT would strand a session whose effective
  * mode sits below it (a `danger-full-access` default would advertise nothing
  * while a narrower-switched session stays confined with no lever).
  */
-export const ESCALATION_TARGETS: readonly SandboxMode[] = ['workspace-write', 'danger-full-access']
+export const ESCALATION_TARGETS: readonly SandboxMode[] = ['danger-full-access']
 
 /**
  * Validate the escalation argument pairing a tool schema cannot express:

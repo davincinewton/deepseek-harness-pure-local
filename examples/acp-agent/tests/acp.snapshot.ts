@@ -262,7 +262,7 @@ const SCENARIOS: Scenario[] = [
     recorded: false,
     headerClass: 'sandbox',
     configPath: PARTIAL_LANDLOCK_CONFIG,
-    env: { DSH_PERMISSION_MODE: 'read-only' },
+    env: { DSH_PERMISSION_MODE: 'workspace-write' },
     posixOnly: true,
   },
   // A valid cwd plus a missing provider executable exercises the assembled
@@ -274,7 +274,7 @@ const SCENARIOS: Scenario[] = [
     headerClass: 'sandbox',
     configPath: PARTIAL_LANDLOCK_CONFIG,
     env: {
-      DSH_PERMISSION_MODE: 'read-only',
+      DSH_PERMISSION_MODE: 'workspace-write',
       DSH_SNAPSHOT_MISSING_SANDBOX_RUNNER: '1',
     },
     posixOnly: true,

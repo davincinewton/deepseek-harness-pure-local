@@ -1,5 +1,5 @@
 /**
- * Assembled-app regression: a parent-only read-only override is seeded into
+ * Assembled-app regression: a parent-only workspace-write override is seeded into
  * its child log and confines a real write under a wider deployment default.
  */
 
@@ -26,8 +26,8 @@ const sessionId = SessionId('subagent-inheritance-parent')
 const refreshing = process.env.DSH_SNAPSHOT === 'refresh'
 const task = 'Delegate the write probe to a subagent.'
 
-/** Seed a completed parent turn with the only read-only fact in the app. */
-async function seedReadOnlyParent(root: string, cwd: string): Promise<void> {
+/** Seed a completed parent turn with the only explicit mode fact in the app. */
+async function seedWorkspaceWriteParent(root: string, cwd: string): Promise<void> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
@@ -40,8 +40,8 @@ async function seedReadOnlyParent(root: string, cwd: string): Promise<void> {
   }
   const events: SessionEvent[] = [
     { type: 'turn/start', seq: 0, time: 10, data: { turn: 1 } },
-    { type: 'user/message', seq: 1, time: 11, data: createUserMessage({ content: [{ type: 'text', text: 'Tighten this session to read-only.' }], source: { kind: 'user' } }), surfaceOp: 'append' },
-    { type: 'sandbox/mode', seq: 2, time: 12, data: { mode: 'read-only' } },
+    { type: 'user/message', seq: 1, time: 11, data: createUserMessage({ content: [{ type: 'text', text: 'Switch this session to workspace-write confinement.' }], source: { kind: 'user' } }), surfaceOp: 'append' },
+    { type: 'sandbox/mode', seq: 2, time: 12, data: { mode: 'workspace-write' } },
     { type: 'turn/end', seq: 3, time: 13, data: { turn: 1, reason: { kind: 'completed' } } },
   ]
   try {
@@ -72,7 +72,7 @@ describe('parent-only override inheritance snapshot', () => {
       },
       prepare: async (runCwd) => {
         cwd = runCwd
-        await seedReadOnlyParent(join(runCwd, '.sessions'), runCwd)
+        await seedWorkspaceWriteParent(join(runCwd, '.sessions'), runCwd)
       },
       inspect: async (runCwd) => {
         // THE physical fact: the child's write never reached the disk. Under
@@ -95,7 +95,7 @@ describe('parent-only override inheritance snapshot', () => {
         expect(childRecords[1]).toMatchObject({
           type: 'sandbox/mode',
           seq: 0,
-          data: { mode: 'read-only', source: 'delegation' },
+          data: { mode: 'workspace-write', source: 'delegation' },
         })
 
         const runtimeContexts = (content: string): string[] => content.trimEnd().split('\n').flatMap((line) => {
@@ -111,8 +111,8 @@ describe('parent-only override inheritance snapshot', () => {
         const policyContexts = [...runtimeContexts(parent), ...runtimeContexts(child)]
         expect(policyContexts).toHaveLength(2)
         for (const context of policyContexts) {
-          expect(context).toContain('Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode.')
-          expect(context).toContain('Do not refuse a required modification from this policy alone')
+          expect(context).toContain('may modify files under the session workspace')
+          expect(context).toContain('Some platform temporary areas may also be writable.')
           expect(context).not.toContain('write and edit tools')
           expect(context).not.toContain('one-shot bash commands')
           expect(context).not.toContain('terminal sessions')
@@ -128,7 +128,7 @@ describe('parent-only override inheritance snapshot', () => {
         expect(normalizedParent).toBe(await readFile(parentExpected, 'utf8'))
         expect(normalizedChild).toBe(await readFile(childExpected, 'utf8'))
         // The child's real write was denied by the real fence.
-        expect(normalizedChild).toContain('file access denied under read-only mode')
+        expect(normalizedChild).toContain('file access denied under workspace-write mode')
       },
     })
 

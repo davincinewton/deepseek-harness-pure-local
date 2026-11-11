@@ -1,9 +1,10 @@
 /**
- * Local sandbox backend. It selects the platform runner chain (Linux bwrap then
- * Landlock; macOS Seatbelt; Windows the ACL restricted-token runner), functionally probes
- * competing candidates once, and reports each wrap's enforcement and stderr
- * classification facts. Missing or unusable confinement fails closed rather
- * than returning the original argv.
+ * Local sandbox backend. It selects the platform runner (Linux Landlock
+ * launcher; macOS Seatbelt; Windows the ACL restricted-token runner), probes
+ * the Landlock launcher for presence and ABI completeness, and reports each
+ * wrap's enforcement and stderr classification facts. Missing or unusable
+ * confinement fails closed rather than returning the original argv — the
+ * user-facing remedy is the GUI full-access switch, never silent degradation.
  *
  * The windows-acl rung additionally owns the write grants: the write SID is
  * the per-WORKSPACE identity derived from the canonical workspace path
@@ -38,12 +39,13 @@ import { SandboxProvider, SandboxUnavailableError } from '@deepseek-ai/dsh-sandb
 import type { ConfinedArgv, ConfinedSandboxMode, RunnerFailureRule, SandboxEnforcement, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { AclWriteGrant, assertTempRootOutsideWorkspace, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
-import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
+import { landlockProfileArgs, runnerCommandProfileArgs, seatbeltProfileArgs } from './profiles.ts'
 
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
   /**
-   * Override the runner argv; bwrap-compatible profile arguments are appended. A
+   * Override the runner argv; bwrap-compatible (``--ro-bind``/``--bind`` dialect)
+   * profile arguments are appended. A
    * non-empty override asserts full enforcement and skips built-in selection and
    * probing. A runner that starts but refuses its profile must be identifiable by
    * {@link runnerFailureSignatures}. Consumers classify a spawn rejection only after
@@ -64,17 +66,8 @@ export interface Config {
   probeTimeoutMs?: number
 }
 
-/** Probe whether `bwrap` can create the profile; the provider caches the bounded result. */
-function defaultProbeBwrap(timeoutMs: number): boolean {
-  const probe = spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent', '--', 'true'], {
-    timeout: timeoutMs,
-    stdio: 'ignore',
-  })
-  return probe.status === 0
-}
-
 /**
- * Functional Seatbelt probe: apply the real `read-only` profile through
+ * Functional Seatbelt probe: apply a real confined profile through
  * `sandbox-exec -p` and run `true` under it — exit 0 means the kernel
  * accepted and enforced the profile (`sandbox-exec` exits non-zero when
  * `sandbox_init` refuses it). A missing `sandbox-exec` (every non-macOS
@@ -83,7 +76,7 @@ function defaultProbeBwrap(timeoutMs: number): boolean {
  * every macOS; if it ever disappears, this probe is what fails closed.
  */
 function defaultProbeSeatbelt(seatbeltExec: string, timeoutMs: number): boolean {
-  const probe = spawnSync(seatbeltExec, [...seatbeltProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], {
+  const probe = spawnSync(seatbeltExec, [...seatbeltProfileArgs({ mode: 'workspace-write', workspaceRoot: tmpdir() }), '--', 'true'], {
     timeout: timeoutMs,
     stdio: 'ignore',
   })
@@ -91,18 +84,19 @@ function defaultProbeSeatbelt(seatbeltExec: string, timeoutMs: number): boolean 
 }
 
 /**
- * Functional windows-acl probe: run the runner in read-only mode (zero grants,
- * no ACL mutation) around `cmd /c exit 0` — exit 0 means the runner created
- * the restricted token and spawned the child under it. The win32 chain is a
- * sole candidate, so the product never probes; the probe exists for override
- * chains and mirrors the other rungs' shape.
+ * Functional windows-acl probe: run the runner without SID flags (it manages
+ * only its own private temp child for the one invocation, no workspace ACL
+ * mutation) around `cmd /c exit 0` —
+ * exit 0 means the runner created the restricted token and spawned the child
+ * under it. The win32 chain is a sole candidate, so the product never probes;
+ * the probe exists for override chains and mirrors the other rungs' shape.
  */
 function defaultProbeWindowsAcl(runnerInvocation: string[], timeoutMs: number): boolean {
   const program = runnerInvocation[0]
   if (program === undefined) return false
   const probe = spawnSync(program, [
     ...runnerInvocation.slice(1),
-    '--workspace', tmpdir(), '--temp', tmpdir(), '--mode', 'read-only',
+    '--workspace', tmpdir(), '--temp', tmpdir(),
     '--', 'cmd', '/c', 'exit', '0',
   ], {
     timeout: timeoutMs,
@@ -117,9 +111,7 @@ export interface SandboxInternals {
   platform?: string
   /** Replaces the platform's chain wholesale (walk mechanics — e.g. probing a rung the product chains only reach unprobed). */
   chain?: readonly SelectedRunner['runner'][]
-  /** Replaces the functional `bwrap` probe (the Linux chain's first rung). */
-  probeBwrap?: () => boolean
-  /** Replaces the functional Landlock launcher probe (the Linux chain's second rung). */
+  /** Replaces the functional Landlock launcher probe (the product's Linux rung: presence + ABI verdict). */
   probeLandlock?: (launcher: string) => SandboxEnforcement | 'unusable'
   /** Replaces the functional Seatbelt probe (the darwin chain's sole rung — only consulted if that chain ever grows). */
   probeSeatbelt?: (seatbeltExec: string) => boolean
@@ -138,7 +130,7 @@ export interface SandboxInternals {
 }
 
 /** The chain's verdict: which runner confines, and how completely it enforces. */
-type SelectedRunner = { runner: 'bwrap' | 'landlock' | 'seatbelt' | 'windows-acl'; enforcement: SandboxEnforcement }
+type SelectedRunner = { runner: 'landlock' | 'seatbelt' | 'windows-acl'; enforcement: SandboxEnforcement }
 
 /** One live session/workspace pair's private temp directory and capability. */
 interface AclTempCapability {
@@ -152,12 +144,13 @@ interface AclTempCapability {
  * second: a platform's chain is probed in preference order only when it has
  * MORE than one candidate (probing arbitrates; it does not re-validate a
  * choice that has no alternative). A platform with no chain fails closed at
- * `confine()`. Linux prefers `bwrap` (its mount profile is closest to the
- * mode vocabulary) over the Landlock launcher; darwin has exactly one
- * candidate, selected without any probe.
+ * `confine()`. Every platform now has exactly one OS-native candidate: Linux
+ * Landlock (probed even as a sole candidate — its launcher is a shipped
+ * artifact that may be absent, see PROBE_SOLO), macOS Seatbelt, and Windows
+ * the restricted-token runner.
  */
 const PLATFORM_CHAINS: Record<string, readonly SelectedRunner['runner'][]> = {
-  linux: ['bwrap', 'landlock'],
+  linux: ['landlock'],
   darwin: ['seatbelt'],
   // The Windows restricted-token runner (@deepseek-ai/dsh-sandbox-windows-acl):
   // a sole candidate, selected without a probe — its execution-time refusal
@@ -166,16 +159,15 @@ const PLATFORM_CHAINS: Record<string, readonly SelectedRunner['runner'][]> = {
 }
 
 /**
- * Enforcement completeness a rung claims when selected WITHOUT a probe (a
- * chain of one). `bwrap` and Seatbelt govern every promised file effect by
- * construction, so the claim is a profile fact; `landlock` is listed for the
- * table's totality but is unreachable unprobed today (the Linux chain has
- * two rungs, so it is only ever selected through its probe, whose report is
- * what distinguishes full from per-ABI-partial — and the launcher additionally
- * self-reports partial enforcement on stderr at every confined run).
+ * Enforcement completeness a rung claims when selected WITHOUT a probe.
+ * Seatbelt governs every promised file effect by construction, so the claim
+ * is a profile fact; windows-acl is `partial` for its documented boundaries.
+ * `landlock` is listed for the table's totality but the product never reads
+ * its entry: the Landlock launcher is always probed (PROBE_SOLO), whose report
+ * distinguishes full from per-ABI-partial — and the launcher additionally
+ * self-reports partial enforcement on stderr at every confined run.
  */
 const STATIC_ENFORCEMENT: Record<SelectedRunner['runner'], SandboxEnforcement> = {
-  bwrap: 'full',
   landlock: 'full',
   seatbelt: 'full',
   // WRITE_RESTRICTED needs Everyone in both restricting lists for process
@@ -185,6 +177,15 @@ const STATIC_ENFORCEMENT: Record<SelectedRunner['runner'], SandboxEnforcement> =
   // ACL-addressable surface but must not advertise the absolute promise.
   'windows-acl': 'partial',
 }
+
+/**
+ * Sole-candidate rungs that are still probed: the Landlock launcher is a
+ * shipped artifact that may be absent or ABI-partial on the host, and its
+ * probe is the fail-closed verdict (D2: no usable backend → no confined run,
+ * never silent degradation). OS-shipped rungs skip it — Seatbelt exists on
+ * every macOS, and windows-acl refuses fail-closed at execution time.
+ */
+const PROBE_SOLO: ReadonlySet<SelectedRunner['runner']> = new Set(['landlock'])
 
 /**
  * A probe bound must be a positive finite number: Node treats
@@ -203,7 +204,6 @@ function assertPositiveFinite(name: string, value: number): void {
  * `ConfinedArgv.denialSignatures`).
  */
 const DENIAL_SIGNATURES = {
-  bwrap: ['read-only file system'],
   landlock: ['permission denied'],
   seatbelt: ['operation not permitted'],
   // pwsh/.NET: "Access to the path '...' is denied."; cmd: "Access is denied.";
@@ -217,9 +217,8 @@ const WINDOWS_ACL_RUNNER_FAILURE_EXIT = 127
 
 /**
  * Runner-owned fatal diagnostics. Landlock has a versioned exit-125 plus
- * fatal-line launcher-failure contract. Bubblewrap's current fatal paths exit
- * 1 but its public contract does not reserve that status, while sandbox-exec
- * publishes no launcher-failure status; those backends remain signature-only.
+ * fatal-line launcher-failure contract, while sandbox-exec publishes no
+ * launcher-failure status; Seatbelt therefore remains signature-only.
  * The windows-acl runner prints `windows-acl-run: <detail>` on every
  * runner-side failure and exits 127 — the rule is exit-gated on that status
  * so a confined command that merely PRINTS the signature (or a runner
@@ -229,7 +228,6 @@ const WINDOWS_ACL_RUNNER_FAILURE_EXIT = 127
  * `examples/acp-agent/tests/fixtures/partial-landlock-sandbox.ts`.
  */
 const RUNNER_FAILURE_RULES = {
-  bwrap: [{ fatalSignatures: ['bwrap: '] }],
   landlock: [{
     allowedExitCodes: [LAUNCHER_FAILURE_EXIT],
     fatalSignatures: [`${LAUNCHER_BIN}: `],
@@ -316,7 +314,7 @@ export class LocalSandboxProvider extends SandboxProvider {
   confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
     if (this.runnerCommand !== undefined) {
       return {
-        argv: [...this.runnerCommand, ...bwrapProfileArgs(policy), '--', ...argv],
+        argv: [...this.runnerCommand, ...runnerCommandProfileArgs(policy), '--', ...argv],
         enforcement: 'full',
         denialSignatures: DENIAL_SIGNATURES.runnerCommand,
         runnerFailureRules: [{ fatalSignatures: this.configuredRunnerFailureSignatures }],
@@ -335,7 +333,6 @@ export class LocalSandboxProvider extends SandboxProvider {
   /** The selected rung's runner invocation (program + profile arguments) for one policy. */
   private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
     switch (runner) {
-      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
       case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
       case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
       case 'windows-acl': return this.windowsAclRunnerArgv(policy)
@@ -357,12 +354,11 @@ export class LocalSandboxProvider extends SandboxProvider {
    */
   private windowsAclRunnerArgv(policy: SandboxPolicy): string[] {
     const sessionId = policy.sessionId
-    if (sessionId === undefined || policy.mode === 'read-only') {
+    if (sessionId === undefined) {
       return [
         ...this.windowsAclRunnerInvocation(),
         '--workspace', policy.workspaceRoot,
         '--temp', tmpdir(),
-        '--mode', policy.mode,
       ]
     }
     const temp = this.materializeAclGrant(sessionId, policy.workspaceRoot)
@@ -370,7 +366,6 @@ export class LocalSandboxProvider extends SandboxProvider {
       ...this.windowsAclRunnerInvocation(),
       '--workspace', policy.workspaceRoot,
       '--temp', temp.dir,
-      '--mode', policy.mode,
       '--write-sid', workspaceWriteSid(policy.workspaceRoot),
       '--temp-write-sid', temp.writeSid,
     ]
@@ -500,8 +495,13 @@ export class LocalSandboxProvider extends SandboxProvider {
     const chain = this.internals.chain ?? PLATFORM_CHAINS[this.internals.platform ?? process.platform] ?? []
     const [first, ...rest] = chain
     if (first === undefined) return 'unavailable'
-    // A sole candidate needs no arbitration; its execution-time refusal still fails closed.
-    if (rest.length === 0) return { runner: first, enforcement: STATIC_ENFORCEMENT[first] }
+    // A sole candidate needs no arbitration; probed solo rungs still fail
+    // closed, the others through their execution-time refusal.
+    if (rest.length === 0) {
+      if (!PROBE_SOLO.has(first)) return { runner: first, enforcement: STATIC_ENFORCEMENT[first] }
+      const enforcement = this.probeRunner(first)
+      return enforcement === 'unusable' ? 'unavailable' : { runner: first, enforcement }
+    }
     for (const runner of chain) {
       const enforcement = this.probeRunner(runner)
       if (enforcement !== 'unusable') return { runner, enforcement }
@@ -511,16 +511,12 @@ export class LocalSandboxProvider extends SandboxProvider {
 
   /** One rung's functional probe (each at most once, via the chain walk). */
   private probeRunner(runner: SelectedRunner['runner']): SandboxEnforcement | 'unusable' {
-    // bwrap's mount profile and Seatbelt's deny-file-write* profile govern
-    // every promised file effect by construction, so their passing probes
-    // are always full enforcement; the Landlock launcher's probe report
-    // distinguishes full from per-ABI-partial, while windows-acl is always
-    // partial for its documented Everyone and hard-link boundaries.
+    // Seatbelt's deny-file-write* profile governs every promised file effect
+    // by construction, so its passing probe is always full enforcement; the
+    // Landlock launcher's probe report distinguishes full from per-ABI-partial,
+    // while windows-acl is always partial for its documented Everyone and
+    // hard-link boundaries.
     switch (runner) {
-      case 'bwrap': {
-        const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs))
-        return probe() ? 'full' : 'unusable'
-      }
       case 'landlock': {
         const probe = this.internals.probeLandlock ?? (launcher => defaultProbeLandlock(launcher, { timeoutMs: this.probeTimeoutMs }))
         return probe(this.landlockLauncher())

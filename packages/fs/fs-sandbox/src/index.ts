@@ -17,15 +17,14 @@
  * syscall) is narrowed by re-canonicalizing immediately before delegating and
  * is accepted for this threat model.
  *
- * Per-call policy: `read-only` denies every mutation; `workspace-write` allows
- * a mutation only when the target canonicalizes under the policy's workspace
- * root or a platform temp area (the SAME writable-root set Seatbelt grants,
- * derived from the one `writableRoots` function so bash and fs cannot drift);
- * `danger-full-access` delegates unfenced. A denial throws the structured
- * `FS_SANDBOX_DENIED` — no text inference is needed (unlike bash's kernel
- * stderr), because an in-process fence knows exactly what it refused. The
- * escalation retry lives in the tool layer (`@deepseek-ai/dsh-tool-fs`),
- * exactly as bash's does.
+ * Per-call policy: `workspace-write` allows a mutation only when the target
+ * canonicalizes under the policy's workspace root or a platform temp area (the
+ * SAME writable-root set Seatbelt grants, derived from the one
+ * `writableRoots` function so bash and fs cannot drift); `danger-full-access`
+ * delegates unfenced. A denial throws the structured `FS_SANDBOX_DENIED` — no
+ * text inference is needed (unlike bash's kernel stderr), because an
+ * in-process fence knows exactly what it refused. The escalation retry lives
+ * in the tool layer (`@deepseek-ai/dsh-tool-fs`), exactly as bash's does.
  *
  * @module @deepseek-ai/dsh-fs-sandbox
  */
@@ -115,21 +114,18 @@ export class SandboxedFileSystem extends LocalFileSystem {
   /**
    * Enforce the per-call policy against `target` and return the EXACT target the
    * mutation must use, so the checked identity is the mutated one (no
-   * check-here-write-there TOCTOU). `read-only` denies; `workspace-write`
-   * re-canonicalizes NOW (`resolve` realpaths the deepest existing ancestor,
-   * reflecting a concurrently swapped symlink), requires containment under a
-   * writable root, and returns THAT fresh target; `danger-full-access` returns
-   * the caller's target unfenced. Throws the structured `FS_SANDBOX_DENIED` on
-   * refusal — the tool layer maps it to the model-facing `[sandbox: …]` marker
-   * and the escalation hint.
+   * check-here-write-there TOCTOU). `workspace-write` re-canonicalizes NOW
+   * (`resolve` realpaths the deepest existing ancestor, reflecting a
+   * concurrently swapped symlink), requires containment under a writable root,
+   * and returns THAT fresh target; `danger-full-access` returns the caller's
+   * target unfenced. Throws the structured `FS_SANDBOX_DENIED` on refusal —
+   * the tool layer maps it to the model-facing `[sandbox: …]` marker and the
+   * escalation hint.
    */
   private async checkedTarget(target: FsTarget, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsTarget> {
     const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
     const { mode } = policy
     if (mode === 'danger-full-access') return target
-    if (mode === 'read-only') {
-      throw new FsError(`cannot write "${target.displayPath}": file access denied under read-only mode`, 'FS_SANDBOX_DENIED')
-    }
     // workspace-write: containment on the FRESH canonical path (catches a
     // symlink ancestor swapped since the tool resolved this target), and the
     // mutation delegates with THIS fresh target — never the stale one.

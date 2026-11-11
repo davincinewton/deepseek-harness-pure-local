@@ -93,7 +93,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
       "try{Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null;'CIM: OK'}catch{'CIM: DENIED'}",
     ].join('')
     const result = runRunner([
-      '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'workspace-write',
+      '--workspace', writableDir, '--temp', isolatedTemp,
       '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
     ])
     expect(result.status, `stderr: ${result.stderr}`).toBe(0)
@@ -105,38 +105,6 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     expect(result.stdout).toContain('CIM: DENIED')
     expect(existsSync(escapeFile)).toBe(false)
     expect(existsSync(join(writableDir, 'child-wrote.txt'))).toBe(true)
-  }, 30_000)
-
-  it('read-only: no write-SID grants — workspace/temp writes denied, reads and $null redirection fine, CIM unavailable', () => {
-    const probe = [
-      "$ErrorActionPreference='SilentlyContinue';",
-      '\'LANGMODE: \' + $ExecutionContext.SessionState.LanguageMode;',
-      `try{Set-Content -Path '${writableDir}\\readonly-child-wrote.txt' -Value ok -ErrorAction Stop;'TARGET-WRITE: OK'}catch{'TARGET-WRITE: DENIED'};`,
-      `try{Set-Content -Path '${isolatedTemp}\\readonly-child-wrote.txt' -Value ok -ErrorAction Stop;'TEMP-WRITE: OK'}catch{'TEMP-WRITE: DENIED'};`,
-      // Set-Content NUL fails at the PowerShell/.NET layer even though the
-      // device DACL's Everyone rights remain an ambient backend boundary.
-      'try{Set-Content -Path \'NUL\' -Value ok -ErrorAction Stop;\'NUL-WRITE: OK\'}catch{\'NUL-WRITE: DENIED\'};',
-      // PowerShell's $null redirection discards without opening NUL — must keep working.
-      'echo hi > $null;\'DOLLAR-NULL: OK\';',
-      `try{Get-Content '${secretFile}' -ErrorAction Stop | Out-Null;'SECRET-READ: OK'}catch{'SECRET-READ: DENIED'};`,
-      // BOTH lists drop Authenticated Users: the WMI namespace security
-      // check fails (0x80041003) — the documented CIM boundary of every
-      // confined mode, the price of the zero ambient-write surface.
-      "try{Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null;'CIM: OK'}catch{'CIM: DENIED'}",
-    ].join('')
-    const result = runRunner([
-      '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'read-only',
-      '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
-    ])
-    expect(result.status, `stderr: ${result.stderr}`).toBe(0)
-    expect(result.stdout).toContain('LANGMODE: ConstrainedLanguage')
-    expect(result.stdout).toContain('TARGET-WRITE: DENIED')
-    expect(result.stdout).toContain('TEMP-WRITE: DENIED')
-    expect(result.stdout).toContain('NUL-WRITE: DENIED')
-    expect(result.stdout).toContain('DOLLAR-NULL: OK')
-    expect(result.stdout).toContain('SECRET-READ: OK')
-    expect(result.stdout).toContain('CIM: DENIED')
-    expect(existsSync(join(writableDir, 'readonly-child-wrote.txt'))).toBe(false)
   }, 30_000)
 
   it('workspace-write: Remove-Item and Rename-Item succeed in the granted workspace (DELETE + FILE_DELETE_CHILD)', () => {
@@ -154,7 +122,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
       `try{Rename-Item -LiteralPath '${victimDir}' -NewName 'renamed-by-child' -ErrorAction Stop;'RENAME-DIR: OK'}catch{'RENAME-DIR: DENIED'}`,
     ].join('')
     const result = runRunner([
-      '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'workspace-write',
+      '--workspace', writableDir, '--temp', isolatedTemp,
       '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
     ])
     expect(result.status, `stderr: ${result.stderr}`).toBe(0)
@@ -182,7 +150,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
         "'TMP-ENV: ' + $env:TMP",
       ].join('')
       const result = runRunner([
-        '--workspace', seamWorkspace, '--temp', privateTemp, '--mode', 'workspace-write', '--write-sid', writeSid,
+        '--workspace', seamWorkspace, '--temp', privateTemp, '--write-sid', writeSid,
         '--temp-write-sid', privateTempSid,
         '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
       ])
@@ -227,7 +195,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     ].join('')
     try {
       const resultA = runRunner([
-        '--workspace', writableDir, '--temp', tempA, '--mode', 'workspace-write',
+        '--workspace', writableDir, '--temp', tempA,
         '--write-sid', writeSid, '--temp-write-sid', sidA,
         '--', process.execPath, '-e', probe, join(tempA, 'a.txt'), join(tempB, 'a-escaped.txt'), sharedWorkspaceFile,
       ])
@@ -237,7 +205,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
       expect(resultA.stdout).toContain('WORKSPACE: OK')
 
       const resultB = runRunner([
-        '--workspace', writableDir, '--temp', tempB, '--mode', 'workspace-write',
+        '--workspace', writableDir, '--temp', tempB,
         '--write-sid', writeSid, '--temp-write-sid', sidB,
         '--', process.execPath, '-e', probe, join(tempB, 'b.txt'), join(tempA, 'b-escaped.txt'), sharedWorkspaceFile, join(tempA, 'a.txt'),
       ])
@@ -263,7 +231,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     const captureB = join(writableDir, 'agentless-temp-b.txt')
     for (const capture of [captureA, captureB]) {
       const result = runRunner([
-        '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'workspace-write',
+        '--workspace', writableDir, '--temp', isolatedTemp,
         '--', process.execPath, '-e', "require('node:fs').writeFileSync(process.argv[1], process.env.TEMP)", capture,
       ])
       expect(result.status, `stderr: ${result.stderr}`).toBe(0)
@@ -285,7 +253,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     mkdirSync(nestedTempRoot)
 
     const result = runRunner([
-      '--workspace', overlapWorkspace, '--temp', nestedTempRoot, '--mode', 'workspace-write',
+      '--workspace', overlapWorkspace, '--temp', nestedTempRoot,
       '--', process.execPath, '-e', "require('node:fs').writeFileSync(process.argv[1], 'ran')", marker,
     ])
     expect(result.status, `stderr: ${result.stderr}`).toBe(127)
@@ -314,9 +282,9 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
       "t('ignore', { stdio: 'ignore' });",
       "t('pipe', { stdio: 'pipe' });",
     ].join('')
-    for (const mode of ['workspace-write', 'read-only'] as const) {
+    for (const mode of ['workspace-write'] as const) {
       const result = runRunner([
-        '--workspace', writableDir, '--temp', isolatedTemp, '--mode', mode,
+        '--workspace', writableDir, '--temp', isolatedTemp,
         '--', 'node', '-e', probe,
       ])
       expect(result.status, `stderr: ${result.stderr}`).toBe(0)
@@ -326,52 +294,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     }
   }, 30_000)
 
-  it('mode-downgrade leak regression: a STANDING workspace grant is inert under read-only and effective again on re-upgrade', () => {
-    // The reported defect: a session that materialized its grant in
-    // workspace-write keeps the ACE standing for the server lifetime. After
-    // switching to read-only, the restricted token's read-only list must carry NO
-    // capability SID — the standing ACE stays but the pass-2 check cannot use
-    // it, so the workspace write is denied (previously it LEAKED). The
-    // switch back reuses the SAME standing ACE: the re-upgrade write lands
-    // without any re-grant.
-    const writeSid = workspaceWriteSid(writableDir)
-    const privateTemp = join(isolatedTemp, 'mode-switch-temp')
-    mkdirSync(privateTemp)
-    const privateTempSid = tempWriteSid(privateTemp)
-    const grant = AclWriteGrant.create(writeSid)
-    grant.add(writableDir)
-    try {
-      const downgradeProbe = [
-        "$ErrorActionPreference='SilentlyContinue';",
-        `try{Set-Content -Path '${writableDir}\\downgraded.txt' -Value ok -ErrorAction Stop;'DOWNGRADE-WRITE: OK (LEAK!)'}catch{'DOWNGRADE-WRITE: DENIED'}`,
-      ].join('')
-      const downgraded = runRunner([
-        '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'read-only',
-        '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', downgradeProbe,
-      ])
-      expect(downgraded.status, `stderr: ${downgraded.stderr}`).toBe(0)
-      expect(downgraded.stdout).toContain('DOWNGRADE-WRITE: DENIED')
-      expect(existsSync(join(writableDir, 'downgraded.txt'))).toBe(false)
-
-      const reupgradeProbe = [
-        "$ErrorActionPreference='SilentlyContinue';",
-        `try{Set-Content -Path '${writableDir}\\reupgraded.txt' -Value ok -ErrorAction Stop;'REUPGRADE-WRITE: OK'}catch{'REUPGRADE-WRITE: DENIED'}`,
-      ].join('')
-      const reupgraded = runRunner([
-        '--workspace', writableDir, '--temp', privateTemp, '--mode', 'workspace-write', '--write-sid', writeSid,
-        '--temp-write-sid', privateTempSid,
-        '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', reupgradeProbe,
-      ])
-      expect(reupgraded.status, `stderr: ${reupgraded.stderr}`).toBe(0)
-      expect(reupgraded.stdout).toContain('REUPGRADE-WRITE: OK')
-      expect(existsSync(join(writableDir, 'reupgraded.txt'))).toBe(true)
-    } finally {
-      grant.dispose()
-      rmSync(privateTemp, { recursive: true, force: true })
-    }
-  }, 30_000)
-
-  it('ambient-writable escape regression: a C:\\Users\\Public subdirectory is denied under BOTH modes (INTERACTIVE absent from both lists)', (ctx) => {
+  it('ambient-writable escape regression: a C:\\Users\\Public subdirectory is denied under confinement (INTERACTIVE absent from the restricting list)', (ctx) => {
     // The Public tree grants write to INTERACTIVE; the D1-D6 matrix pinned
     // that removing INTERACTIVE from the restricting lists closes the escape.
     // The committed suites never probed it — this pins the ambient boundary
@@ -384,9 +307,9 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
       "$ErrorActionPreference='SilentlyContinue';",
       `try{Set-Content -Path '${publicProbeDir}\\public-escaped.txt' -Value ok -ErrorAction Stop;'PUBLIC-WRITE: OK (ESCAPE!)'}catch{'PUBLIC-WRITE: DENIED'}`,
     ].join('')
-    for (const mode of ['read-only', 'workspace-write'] as const) {
+    for (const mode of ['workspace-write'] as const) {
       const result = runRunner([
-        '--workspace', writableDir, '--temp', isolatedTemp, '--mode', mode,
+        '--workspace', writableDir, '--temp', isolatedTemp,
         '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
       ])
       expect(result.status, `stderr: ${result.stderr}`).toBe(0)
@@ -395,15 +318,15 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     }
   }, 30_000)
 
-  it('partial boundary: an external Everyone-Modify directory stays writable under BOTH modes', () => {
+  it('partial boundary: an external Everyone-Modify directory stays writable under confinement', () => {
     // Everyone is a required keep-alive restricting SID: without it early DLL
     // initialization and CNG fail. A normal DACL that grants Everyone Modify
     // therefore also clears the WRITE_RESTRICTED pass-2 check. Pin this
     // unavoidable gap beside the provider's `partial` enforcement report.
-    for (const mode of ['read-only', 'workspace-write'] as const) {
+    for (const mode of ['workspace-write'] as const) {
       const target = join(worldWritableDir, `${mode}.txt`)
       const result = runRunner([
-        '--workspace', writableDir, '--temp', isolatedTemp, '--mode', mode,
+        '--workspace', writableDir, '--temp', isolatedTemp,
         '--', process.execPath, '-e', "require('node:fs').writeFileSync(process.argv[1], 'written')", target,
       ])
       expect(result.status, `mode: ${mode}\nstderr: ${result.stderr}`).toBe(0)
@@ -427,7 +350,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     const result = runRunner([
       // This workspace has not been granted before the alias exists: the first
       // recursive materialization reaches the shared file security descriptor.
-      '--workspace', hardlinkWorkspace, '--temp', hardlinkTemp, '--mode', 'workspace-write',
+      '--workspace', hardlinkWorkspace, '--temp', hardlinkTemp,
       '--', process.execPath, '-e', "require('node:fs').writeFileSync(process.argv[1], 'mutated')", workspaceLink,
     ])
     expect(result.status, `stderr: ${result.stderr}`).toBe(0)
@@ -450,7 +373,7 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     ]
     for (const args of cases) {
       const result = runRunner([
-        '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'workspace-write',
+        '--workspace', writableDir, '--temp', isolatedTemp,
         ...args,
         '--', process.execPath, '-e', 'process.exit(99)',
       ])

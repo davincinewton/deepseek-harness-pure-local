@@ -121,11 +121,8 @@ function pwshDescription(backgroundEnabled: boolean, escalationModes: readonly S
   // win32-only; a future POSIX pwsh-sandbox composition must gate both
   // sentences on the platform instead (tracked in the pwsh-tool-and-executor
   // Agent Note).
-  return base + ' Under the Windows sandbox, read-only pwsh runs in PowerShell ConstrainedLanguage mode, while '
-    + 'workspace-write stays in FullLanguage unless host policy says otherwise. In read-only, prefer cmdlets and core types (`[string]`, `[datetime]`, `[regex]`, `[guid]`); '
-    + '.NET static calls (`[System.IO.*]::`, `[math]::`), `Add-Type`, COM objects, and reflection fail '
-    + 'with "only core types" errors. `-f` formatting, property access, and core cmdlets work. '
-    + 'In both confined modes, programs cannot open named pipes, so a command that captures another '
+  return base + ' Under the Windows sandbox pwsh stays in FullLanguage unless host policy says otherwise. '
+    + 'Under confinement, programs cannot open named pipes, so a command that captures another '
     + 'program\'s output through piped stdio (Node.js `child_process.spawn`/`exec` with the default '
     + '`stdio: \'pipe\'`) fails with EPERM, while `stdio: \'inherit\'` and `stdio: \'ignore\'` spawns '
     + 'work and PowerShell\'s own pipelines are unaffected. That EPERM is the documented boundary: '

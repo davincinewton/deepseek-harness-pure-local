@@ -706,7 +706,7 @@ export type Config = LocalConfig
 
 Depends on: [`LocalConfig`](#deepseek-aidsh-fs-local)
 
-Source: [`packages/fs/fs-sandbox/src/index.ts:49`](../packages/fs/fs-sandbox/src/index.ts)
+Source: [`packages/fs/fs-sandbox/src/index.ts:48`](../packages/fs/fs-sandbox/src/index.ts)
 
 <a id="deepseek-aidsh-goal"></a>
 
@@ -1553,7 +1553,8 @@ Source: [`packages/guard/repeat-tool-reminder/src/index.ts:28`](../packages/guar
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
   /**
-   * Override the runner argv; bwrap-compatible profile arguments are appended. A
+   * Override the runner argv; bwrap-compatible (``--ro-bind``/``--bind`` dialect)
+   * profile arguments are appended. A
    * non-empty override asserts full enforcement and skips built-in selection and
    * probing. A runner that starts but refuses its profile must be identifiable by
    * {@link runnerFailureSignatures}. Consumers classify a spawn rejection only after
@@ -1575,7 +1576,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/sandbox/sandbox-local/src/index.ts:44`](../packages/sandbox/sandbox-local/src/index.ts)
+Source: [`packages/sandbox/sandbox-local/src/index.ts:45`](../packages/sandbox/sandbox-local/src/index.ts)
 
 <a id="deepseek-aidsh-sandbox-policy"></a>
 
@@ -1584,13 +1585,13 @@ Source: [`packages/sandbox/sandbox-local/src/index.ts:44`](../packages/sandbox/s
 ```ts config-catalog
 /**
  * Plugin config: the deployment's sandbox default. All optional — `Config`
- * supplies the defaults (`mode: 'read-only'` is the fail-safe default; a
- * deployment that wants a workspace-writable agent opts in explicitly). The
- * runner choice is NOT here (it is the `ctx.sandbox` provider's config), nor
- * is any per-family knob: this is the one shared policy home.
+ * supplies the defaults (`mode: 'workspace-write'` — Mode A, the confinement
+ * the two-mode design starts every session in). The runner choice is NOT here
+ * (it is the `ctx.sandbox` provider's config), nor is any per-family knob:
+ * this is the one shared policy home.
  */
 export interface Config {
-  /** File-sandbox mode a session starts from (default: `read-only`). */
+  /** File-sandbox mode a session starts from (default: `workspace-write`). */
   mode?: SandboxMode
   /**
    * Fallback root for agentless calls and sessions without a cwd (default:
@@ -1602,7 +1603,7 @@ export interface Config {
 
 Depends on: [`SandboxMode`](subsystems/sandbox.md)
 
-Source: [`packages/sandbox/sandbox-policy/src/index.ts:67`](../packages/sandbox/sandbox-policy/src/index.ts)
+Source: [`packages/sandbox/sandbox-policy/src/index.ts:65`](../packages/sandbox/sandbox-policy/src/index.ts)
 
 <a id="deepseek-aidsh-sdk-jsonrpc-server"></a>
 

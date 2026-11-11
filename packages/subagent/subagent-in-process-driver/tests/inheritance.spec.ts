@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -23,7 +23,7 @@ import { startInProcessRun } from '../src/index.ts'
 
 type Script = ConstructorParameters<typeof MockAdapter>[0]
 
-const READ_ONLY_DENIAL = '[sandbox: file access denied under read-only mode]'
+const POLICY_DENIAL = '[sandbox: file access denied under workspace-write mode]'
 const contexts: Context[] = []
 let workspace: string
 
@@ -82,8 +82,8 @@ describe('in-process policy inheritance', () => {
   it('records the parent sandbox override and the approval pin before publishing a spawn child', async () => {
     const script: Script = []
     const { ctx, parent } = await setupWalled(script)
-    const blocked = join(workspace, 'spawn-blocked.txt')
-    setSandboxMode(parent.session, 'read-only')
+    const blocked = join(homedir(), 'dsh-inherit-spawn-blocked.txt')
+    setSandboxMode(parent.session, 'workspace-write')
     // No parent approval override: the child pin must not depend on one.
     expect(ctx.approval.overrideOf(parent.session)).toBeUndefined()
     const parentLogLength = parent.session.events.length
@@ -98,15 +98,15 @@ describe('in-process policy inheritance', () => {
       const child = run.localAgent as Agent
 
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-      expect(toolResultTexts(child).join('\n')).toContain(READ_ONLY_DENIAL)
+      expect(toolResultTexts(child).join('\n')).toContain(POLICY_DENIAL)
       expect(result.stopReason).toBe('completed')
       expect(child.session.events.slice(0, 2)).toMatchObject([
-        { type: 'sandbox/mode', seq: 0, data: { mode: 'read-only', source: 'delegation' } },
+        { type: 'sandbox/mode', seq: 0, data: { mode: 'workspace-write', source: 'delegation' } },
         { type: 'approval/policy', seq: 1, data: { policy: 'never', source: 'delegation' } },
       ])
       expect(child.session.firstLiveSeq).toBe(0)
       expect(child.session.header.seedLength).toBeUndefined()
-      expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('read-only')
+      expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('workspace-write')
       expect(ctx.approval.overrideOf(child.session)).toBe('never')
       const request = child.session.events.find(
         (event): event is SessionEvent<'request/header'> => event.type === 'request/header',
@@ -122,7 +122,7 @@ describe('in-process policy inheritance', () => {
         .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
         .map(block => block.text)
         .join('\n')
-      expect(contextText).toContain('Current DSH file policy: read-only')
+      expect(contextText).toContain('Current DSH file policy: workspace-write')
       expect(contextText).toContain('Approval prompts are disabled')
       // The statement rides runtime context; the system prompt stays uniform.
       expect(contextText).toContain('You are a delegated subagent')
@@ -137,10 +137,10 @@ describe('in-process policy inheritance', () => {
   it('places inherited events after a fork prefix so fresh policy wins stale seed state', async () => {
     const script: Script = []
     const { ctx, parent } = await setupWalled(script)
-    const blocked = join(workspace, 'fork-blocked.txt')
+    const blocked = join(homedir(), 'dsh-inherit-fork-blocked.txt')
     setSandboxMode(parent.session, 'workspace-write')
     const seed = [...parent.session.events]
-    setSandboxMode(parent.session, 'read-only')
+    setSandboxMode(parent.session, 'workspace-write')
     script.push(
       toolCallResponse('write', 'write', { file_path: blocked, content: 'escaped' }),
       textResponse('child done'),
@@ -156,10 +156,10 @@ describe('in-process policy inheritance', () => {
       // seq 1 is the constructor's end-seed marker.
       expect(child.session.events.filter(event => event.type === 'sandbox/mode')).toMatchObject([
         { seq: 0, data: { mode: 'workspace-write' } },
-        { seq: 2, data: { mode: 'read-only', source: 'delegation' } },
+        { seq: 2, data: { mode: 'workspace-write', source: 'delegation' } },
       ])
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-      expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('read-only')
+      expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('workspace-write')
 
       setSandboxMode(child.session, 'danger-full-access')
       expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('danger-full-access')
@@ -171,7 +171,7 @@ describe('in-process policy inheritance', () => {
   it('captures policy at delegation before asynchronous child creation', async () => {
     const script: Script = [textResponse('child done')]
     const { ctx, parent } = await setupWalled(script)
-    setSandboxMode(parent.session, 'read-only')
+    setSandboxMode(parent.session, 'workspace-write')
 
     const starting = startInProcessRun(spawnRequest(parent), {})
     setSandboxMode(parent.session, 'danger-full-access')
@@ -180,7 +180,7 @@ describe('in-process policy inheritance', () => {
       await run.result
       const child = run.localAgent as Agent
       expect(ctx.sandboxPolicy.overrideOf(parent.session)).toBe('danger-full-access')
-      expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('read-only')
+      expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('workspace-write')
     } finally {
       await run.dispose()
     }
@@ -219,13 +219,13 @@ describe('in-process policy inheritance', () => {
       consulted = true
       return Promise.resolve('allowed-once' as const)
     })
-    const blocked = join(workspace, 'escalation-blocked.txt')
-    setSandboxMode(parent.session, 'read-only')
+    const blocked = join(homedir(), 'dsh-inherit-escalation-blocked.txt')
+    setSandboxMode(parent.session, 'workspace-write')
     script.push(
       toolCallResponse('write', 'write', {
         file_path: blocked,
         content: 'escaped',
-        sandbox_permissions: 'workspace-write',
+        sandbox_permissions: 'danger-full-access',
         justification: 'test escalation from a delegated child',
       }),
       textResponse('child done'),
@@ -239,7 +239,7 @@ describe('in-process policy inheritance', () => {
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       expect(consulted).toBe(false)
       expect(toolResultTexts(child).join('\n'))
-        .toContain('the user rejected escalating this operation to "workspace-write"')
+        .toContain('the user rejected escalating this operation to "danger-full-access"')
       const asked = child.session.events.find(
         (event): event is SessionEvent<'approval/asked'> => event.type === 'approval/asked',
       )

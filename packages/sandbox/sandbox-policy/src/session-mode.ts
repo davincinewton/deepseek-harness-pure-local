@@ -39,7 +39,7 @@ declare module '@deepseek-ai/dsh-session/types' {
 }
 
 /** Every {@link SandboxMode}, for option advertisement and runtime validation of untrusted mode strings. */
-export const SANDBOX_MODES: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access']
+export const SANDBOX_MODES: readonly SandboxMode[] = ['workspace-write', 'danger-full-access']
 
 /**
  * The session's sandbox-mode override: the last `sandbox/mode` event in the
