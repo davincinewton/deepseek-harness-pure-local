@@ -90,7 +90,7 @@ describe('browser seam real composition (Loader)', () => {
     expect(unloaded).toEqual([])
 
     expect(ctx.browser).toBeDefined()
-    for (const name of ['browser_navigate', 'browser_snapshot', 'browser_act', 'browser_extract', 'browser_close']) {
+    for (const name of ['browser_navigate', 'browser_snapshot', 'browser_act', 'browser_extract', 'browser_extract_list', 'browser_wait', 'browser_close']) {
       expect(ctx.tools.get(name), name).toBeDefined()
     }
     // screenshot is config-disabled; it must not appear even implicitly.

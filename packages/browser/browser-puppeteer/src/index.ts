@@ -50,6 +50,18 @@ export interface Config {
   userDataDir?: string
   /** Extra Chrome launch arguments (e.g. `--no-sandbox` in containers without user namespaces). */
   chromeArgs?: string[]
+  /**
+   * Page user-agent to present. The default is a plain desktop Chrome agent
+   * because search engines and most news sites bot-filter the headless
+   * shell's own `HeadlessChrome` UA (measured: Google answers the SERP with a
+   * 429 `/sorry` wall, Bing serves a results-less shell, DuckDuckGo 403s).
+   * Set the empty string to present the browser's native headless UA.
+   */
+  userAgent?: string
+  /** Page viewport width in CSS pixels. */
+  viewportWidth?: number
+  /** Page viewport height in CSS pixels. */
+  viewportHeight?: number
   /** Navigation budget in milliseconds. */
   navigationTimeoutMs?: number
   /** Element wait / action budget in milliseconds. */
@@ -80,6 +92,9 @@ export const Config: z<Config> = z.object({
   executablePath: z.string().default(''),
   userDataDir: z.string().default(''),
   chromeArgs: z.array(z.string()).default([]),
+  userAgent: z.string().default('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'),
+  viewportWidth: z.number().default(1280),
+  viewportHeight: z.number().default(800),
   navigationTimeoutMs: z.number().default(45_000),
   actionTimeoutMs: z.number().default(15_000),
   actionSettleMs: z.number().default(2_000),
@@ -125,6 +140,8 @@ export function apply(ctx: Context, config: Config): void {
   assertPositiveBudget('actionSettleMs', resolved.actionSettleMs)
   assertPositiveInteger('maxUrlLength', resolved.maxUrlLength)
   assertPositiveInteger('maxEvaluateTextChars', resolved.maxEvaluateTextChars)
+  assertPositiveInteger('viewportWidth', resolved.viewportWidth)
+  assertPositiveInteger('viewportHeight', resolved.viewportHeight)
   if (resolved.provision !== 'auto' && resolved.provision !== 'off') {
     throw new Error(`browser-puppeteer: provision must be 'auto' or 'off'; got ${JSON.stringify(resolved.provision)}`)
   }
@@ -135,6 +152,9 @@ export function apply(ctx: Context, config: Config): void {
     provision: resolved.provision,
     userDataDir: resolved.userDataDir,
     chromeArgs: resolved.chromeArgs,
+    userAgent: resolved.userAgent,
+    viewportWidth: resolved.viewportWidth,
+    viewportHeight: resolved.viewportHeight,
     navigationTimeoutMs: resolved.navigationTimeoutMs,
     actionTimeoutMs: resolved.actionTimeoutMs,
     actionSettleMs: resolved.actionSettleMs,

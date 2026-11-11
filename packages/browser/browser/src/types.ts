@@ -93,12 +93,14 @@ export type BrowserActionKind = 'click' | 'fill' | 'press' | 'select'
 /**
  * One page mutation. `target` is a Puppeteer selector expression the provider
  * resolves (CSS, `::-p-aria(Name)`, or `::-p-text(text)`); `value` is the text
- * for `fill`, the key for `press`, and the option for `select`.
+ * for `fill`, the key for `press`, and the option for `select`. `index` picks
+ * the 0-based match among visible matches; omitted means the first match.
  */
 export interface BrowserActRequest {
   readonly action: BrowserActionKind
   readonly target: string
   readonly value?: string
+  readonly index?: number
 }
 
 /** Result of one action: the post-action page status. */
@@ -124,6 +126,52 @@ export interface BrowserExtractResult {
   /** True when the seam cut `text` to `maxChars`. */
   readonly truncated: boolean
 }
+
+/**
+ * One field of an extracted row: the text of the first descendant match (or of
+ * the row itself when `selector` is omitted), or one attribute of it.
+ */
+export interface BrowserExtractListField {
+  /** Descendant selector within the row; omitted = the row element itself. */
+  readonly selector?: string
+  /** Attribute name to read instead of text; requires `selector`. */
+  readonly attribute?: string
+}
+
+/**
+ * One structured read: every row matching `selector`, projected onto `fields`.
+ * Rows are capped to `limit` and each field to `maxFieldChars`; a field whose
+ * target is missing from a row is omitted from that row.
+ */
+export interface BrowserExtractListRequest {
+  readonly selector: string
+  readonly fields: Readonly<Record<string, BrowserExtractListField>>
+  readonly limit: number
+  readonly maxFieldChars: number
+}
+
+/** The structured read's outcome: the row objects plus the page URL. */
+export interface BrowserExtractListResult {
+  readonly url: string
+  readonly rows: readonly Readonly<Record<string, string>>[]
+  /** Number of rows returned (at most `limit`). */
+  readonly count: number
+  /** True when more rows matched `selector` than `limit`. */
+  readonly truncated: boolean
+}
+
+/**
+ * One wait request. A `selector` waits for a visible match; without one the
+ * provider waits for the current navigation/redirect to settle. `timeoutMs` is
+ * the provider-side wait budget.
+ */
+export interface BrowserWaitRequest {
+  readonly selector?: string
+  readonly timeoutMs: number
+}
+
+/** Result of one wait: the post-wait page status. */
+export type BrowserWaitResult = BrowserPageStatus
 
 /** One screenshot request. `fullPage` captures beyond the viewport. */
 export interface BrowserScreenshotRequest {
@@ -163,6 +211,10 @@ export interface BrowserProvider {
   act(pageKey: BrowserPageKey, request: BrowserActRequest, signal?: AbortSignal): Promise<BrowserActResult>
   /** Read text (or one attribute) out of the key's page. */
   extract(pageKey: BrowserPageKey, request: BrowserExtractRequest, signal?: AbortSignal): Promise<BrowserExtractResult>
+  /** Read every row matching `selector`, projecting `fields`. */
+  extractList(pageKey: BrowserPageKey, request: BrowserExtractListRequest, signal?: AbortSignal): Promise<BrowserExtractListResult>
+  /** Wait for a selector or for the current navigation to settle. */
+  wait(pageKey: BrowserPageKey, request: BrowserWaitRequest, signal?: AbortSignal): Promise<BrowserWaitResult>
   /** Capture the key's page as PNG. */
   screenshot(pageKey: BrowserPageKey, request: BrowserScreenshotRequest, signal?: AbortSignal): Promise<BrowserScreenshotResult>
   /** Release the key's page. Unknown keys are a no-op so teardown is idempotent. */
@@ -175,6 +227,6 @@ export interface BrowserProvider {
  * unavailable, missing, unusable, ambiguous, or duplicate providers and
  * provider failure; the Puppeteer provider additionally distinguishes invalid
  * or blocked URLs, missing pages, action and target failures, timeouts,
- * cancellation, and provisioning failures.
+ * cancellation, page changes during a read, and provisioning failures.
  */
 export class BrowserError extends HarnessError {}

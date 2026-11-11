@@ -14,7 +14,7 @@ Search the web through the user's real Chrome browser (via the `mcp__chrome__*` 
 
 ## If the chrome tools are unavailable
 
-If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), do not attempt browser search: run the built-in `web_search` tool instead — it returns the same result shape (title, source, date, snippet, URL) — and note that browser-based search is unavailable because the mcp-chrome bridge is not running. Do not retry chrome calls or loop.
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), do not attempt chrome-tool search: if the managed `browser_*` tools are in the catalog, use the `headless-web-search` skill instead (anonymous headless browser, no bridge needed); otherwise run the built-in `web_search` tool — it returns the same result shape (title, source, date, snippet, URL) — and note that bridge-based search is unavailable. Do not retry chrome calls or loop.
 
 ## Rules
 

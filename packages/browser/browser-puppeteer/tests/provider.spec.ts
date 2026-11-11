@@ -17,11 +17,16 @@ const { launchMock, page, browser, locatorChain } = vi.hoisted(() => {
     evaluate: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ text: 'body text', elements: [] })),
     waitForSelector: vi.fn(async (_selector: string, _opts?: unknown): Promise<unknown> => null),
     waitForNetworkIdle: vi.fn(async () => {}),
+    waitForFunction: vi.fn(async (..._args: unknown[]): Promise<unknown> => true),
+    $$: vi.fn(async (_selector: string): Promise<unknown[]> => []),
     screenshot: vi.fn(async (_opts?: unknown): Promise<Uint8Array<ArrayBuffer>> => new Uint8Array(4)),
     close: vi.fn(async () => {}),
     isClosed: () => false,
     on: vi.fn(),
     setDefaultTimeout: vi.fn(),
+    setUserAgent: vi.fn(async () => {}),
+    setViewport: vi.fn(async () => {}),
+    keyboard: { type: vi.fn(async () => {}) },
     mainFrame: () => ({ id: 1 }),
     locator: vi.fn((): typeof locatorChain => locatorChain),
   }
@@ -32,7 +37,7 @@ const { launchMock, page, browser, locatorChain } = vi.hoisted(() => {
   }
   const processHandle = { kill: vi.fn() }
   const browser = {
-    newPage: async () => page,
+    newPage: vi.fn(async () => page),
     close: vi.fn(async () => {}),
     process: () => processHandle,
   }
@@ -72,6 +77,9 @@ function providerOptions(overrides: Partial<import('@deepseek-ai/dsh-browser-pup
     provision: 'off',
     userDataDir: '',
     chromeArgs: [],
+    userAgent: '',
+    viewportWidth: 1280,
+    viewportHeight: 800,
     navigationTimeoutMs: 1000,
     actionTimeoutMs: 500,
     actionSettleMs: 1,
@@ -129,6 +137,7 @@ function fakeElement(init: {
 beforeEach(() => {
   launchMock.mockClear()
   browser.close.mockClear()
+  browser.newPage.mockReset().mockImplementation(async () => page)
   browser.process().kill.mockClear()
   page.goto.mockClear().mockResolvedValue({ status: () => 200 })
   page.close.mockClear()
@@ -136,6 +145,11 @@ beforeEach(() => {
   locatorChain.fill.mockReset().mockResolvedValue(undefined)
   page.screenshot.mockClear()
   page.waitForNetworkIdle.mockClear()
+  page.waitForFunction.mockReset().mockResolvedValue(true)
+  page.$$.mockReset().mockResolvedValue([])
+  page.setUserAgent.mockClear()
+  page.setViewport.mockClear()
+  page.keyboard.type.mockClear()
   page.on.mockClear()
   page.waitForSelector.mockReset()
   page.evaluate.mockReset().mockResolvedValue({ text: 'body text', elements: [] })
@@ -248,6 +262,103 @@ describe('PuppeteerBrowserProvider actions', () => {
       .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_ACTION_FAILED' }))
     await provider.dispose()
   })
+
+  it('settles a navigation triggered by press', async () => {
+    const press = vi.fn(async () => {})
+    page.waitForSelector.mockResolvedValueOnce({ press })
+    const provider = await opened()
+    await provider.act(pageKey, { action: 'press', target: 'input', value: 'Enter' })
+    expect(press).toHaveBeenCalledWith('Enter')
+    // Without this settle the next read races the navigation and dies with
+    // "Execution context was destroyed".
+    expect(page.waitForNetworkIdle).toHaveBeenCalled()
+    await provider.dispose()
+  })
+
+  it('reports a missing press target through the resolved-handle path', async () => {
+    page.waitForSelector.mockResolvedValueOnce(null)
+    const provider = await opened()
+    await expect(provider.act(pageKey, { action: 'press', target: 'input', value: 'Enter' }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_TARGET_NOT_FOUND' }))
+    await provider.dispose()
+  })
+
+  it('clicks the Nth visible match and disposes the other handles', async () => {
+    const visibleHandle = (): Record<string, unknown> => ({
+      click: vi.fn(async () => {}),
+      boundingBox: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+      dispose: vi.fn(async () => {}),
+    })
+    const first = visibleHandle()
+    const second = visibleHandle()
+    const hidden = {
+      click: vi.fn(async () => {}),
+      boundingBox: async () => null,
+      dispose: vi.fn(async () => {}),
+    }
+    page.$$.mockResolvedValueOnce([first, hidden, second] as never)
+    const provider = await opened()
+    await provider.act(pageKey, { action: 'click', target: 'li.result', index: 1 })
+    expect(page.waitForFunction).toHaveBeenCalled()
+    expect(first.click).not.toHaveBeenCalled()
+    expect(hidden.click).not.toHaveBeenCalled()
+    expect(hidden.dispose).toHaveBeenCalled()
+    expect(second.click).toHaveBeenCalled()
+    await provider.dispose()
+  })
+
+  it('fills the Nth visible match by triple-click select then type', async () => {
+    const target = {
+      click: vi.fn(async () => {}),
+      boundingBox: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+      dispose: vi.fn(async () => {}),
+    }
+    page.$$.mockResolvedValueOnce([target] as never)
+    const provider = await opened()
+    await provider.act(pageKey, { action: 'fill', target: 'input.q', value: 'hello', index: 0 })
+    expect(target.click).toHaveBeenCalledWith({ count: 3 })
+    expect(page.keyboard.type).toHaveBeenCalledWith('hello')
+    await provider.dispose()
+  })
+
+  it('reports a missing indexed match as BROWSER_TARGET_NOT_FOUND', async () => {
+    page.waitForFunction.mockRejectedValueOnce(new TimeoutError('Timed out'))
+    const provider = await opened()
+    const failure = await provider.act(pageKey, { action: 'click', target: 'li.result', index: 3 }).then(
+      () => { throw new Error('expected act to reject') },
+      (error: unknown) => error as { code: string; message: string },
+    )
+    expect(failure.code).toBe('BROWSER_TARGET_NOT_FOUND')
+    expect(failure.message).toContain('index 3')
+    await provider.dispose()
+  })
+
+  it('rejects a negative or fractional index before touching the page', async () => {
+    const provider = await opened()
+    await expect(provider.act(pageKey, { action: 'click', target: 'li', index: -1 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_ACTION_FAILED' }))
+    await provider.dispose()
+  })
+
+  it('re-checks visibility when matches vanish between predicate and handles', async () => {
+    page.$$.mockResolvedValueOnce([])
+    const provider = await opened()
+    const failure = await provider.act(pageKey, { action: 'click', target: 'li.result', index: 0 }).then(
+      () => { throw new Error('expected act to reject') },
+      (error: unknown) => error as { code: string; message: string },
+    )
+    expect(failure.code).toBe('BROWSER_TARGET_NOT_FOUND')
+    expect(failure.message).toContain('at index 0')
+    await provider.dispose()
+  })
+
+  it('maps a non-timeout predicate failure on an indexed target to BROWSER_ACTION_FAILED', async () => {
+    page.waitForFunction.mockRejectedValueOnce(new Error('page is gone'))
+    const provider = await opened()
+    await expect(provider.act(pageKey, { action: 'click', target: 'li.result', index: 0 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_ACTION_FAILED' }))
+    await provider.dispose()
+  })
 })
 
 describe('PuppeteerBrowserProvider reads', () => {
@@ -342,6 +453,213 @@ describe('PuppeteerBrowserProvider reads', () => {
       .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
     await provider.dispose()
   })
+
+  it('maps a read interrupted by navigation to BROWSER_PAGE_CHANGED', async () => {
+    page.evaluate.mockRejectedValueOnce(new Error('Execution context was destroyed, most likely because of a navigation.'))
+    const provider = await opened()
+    await expect(provider.snapshot(pageKey, { maxTextChars: 100, maxElements: 10 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PAGE_CHANGED' }))
+    await provider.dispose()
+  })
+
+  it('maps a read timeout and a generic read failure separately', async () => {
+    page.evaluate.mockRejectedValueOnce(new TimeoutError('Timed out'))
+    const provider = await opened()
+    await expect(provider.snapshot(pageKey, { maxTextChars: 100, maxElements: 10 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_TIMEOUT' }))
+    page.evaluate.mockRejectedValueOnce(new Error('weird page state'))
+    await expect(provider.snapshot(pageKey, { maxTextChars: 100, maxElements: 10 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
+    await provider.dispose()
+  })
+
+  it('maps element read failures in extract through the read taxonomy', async () => {
+    page.waitForSelector.mockRejectedValueOnce(new Error('boom'))
+    const provider = await opened()
+    await expect(provider.extract(pageKey, { selector: 'a', maxChars: 50 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
+    const handle = { evaluate: vi.fn(async () => { throw new Error('Execution context was destroyed') }) }
+    page.waitForSelector.mockResolvedValueOnce(handle)
+    await expect(provider.extract(pageKey, { selector: 'a', maxChars: 50 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PAGE_CHANGED' }))
+    page.evaluate.mockRejectedValueOnce(new Error('body gone'))
+    await expect(provider.extract(pageKey, { maxChars: 50 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
+    await provider.dispose()
+  })
+
+  it('passes a cancelled read through unchanged', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const provider = await opened()
+    await expect(provider.snapshot(pageKey, { maxTextChars: 10, maxElements: 5 }, controller.signal))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_CANCELLED' }))
+    await provider.dispose()
+  })
+
+  it('maps a dead browser connection to a structured page error', async () => {
+    browser.newPage.mockRejectedValueOnce(new Error('Connection closed.'))
+    const provider = new PuppeteerBrowserProvider(providerOptions())
+    await expect(provider.navigate(pageKey, { url: 'https://example.com' }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
+    await provider.dispose()
+  })
+})
+
+describe('PuppeteerBrowserProvider extract-list', () => {
+  it('returns projected rows and flags rows beyond the limit as truncated', async () => {
+    page.evaluate.mockResolvedValueOnce({
+      rows: [{ title: 'Result A', href: 'https://a.test' }],
+      total: 12,
+    })
+    const provider = await opened()
+    const result = await provider.extractList(pageKey, {
+      selector: '#rso > div:has(a h3)',
+      fields: { title: { selector: 'a h3' }, href: { selector: 'a', attribute: 'href' } },
+      limit: 8,
+      maxFieldChars: 200,
+    })
+    expect(result).toEqual({
+      url: 'https://page.test/final',
+      rows: [{ title: 'Result A', href: 'https://a.test' }],
+      count: 1,
+      truncated: true,
+    })
+    const [pageFunction, selector, fields, limit, maxFieldChars] = page.evaluate.mock.calls[0]!
+    expect(String(pageFunction)).toMatch(/^function anonymous\(/)
+    expect(String(pageFunction)).not.toContain('__name(')
+    expect(selector).toBe('#rso > div:has(a h3)')
+    expect(fields).toEqual({ title: { selector: 'a h3' }, href: { selector: 'a', attribute: 'href' } })
+    expect(limit).toBe(8)
+    expect(maxFieldChars).toBe(200)
+    await provider.dispose()
+  })
+
+  it('maps an interrupted extract-list read to BROWSER_PAGE_CHANGED', async () => {
+    page.evaluate.mockRejectedValueOnce(new Error('Target closed'))
+    const provider = await opened()
+    await expect(provider.extractList(pageKey, { selector: '.row', fields: { title: {} }, limit: 5, maxFieldChars: 50 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PAGE_CHANGED' }))
+    await provider.dispose()
+  })
+
+  it('projects rows onto text, attributes, and row fields against a DOM stub', async () => {
+    page.evaluate.mockResolvedValueOnce({ rows: [], total: 3 })
+    const provider = await opened()
+    await provider.extractList(pageKey, {
+      selector: '.row',
+      fields: {
+        title: { selector: 'h3' },
+        link: { selector: 'a', attribute: 'href' },
+        rowText: {},
+      },
+      limit: 2,
+      maxFieldChars: 200,
+    })
+    const [pageFunction] = page.evaluate.mock.calls[0]!
+    const row = (title: string | null, href: string, text: string) => ({
+      innerText: text,
+      querySelector: (sel: string) => sel === 'h3'
+        ? (title === null ? null : { innerText: title })
+        : { getAttribute: (attr: string) => (attr === 'href' ? href : null) },
+    })
+    const stub = {
+      querySelectorAll: () => [
+        row('  First   Result  ', 'https://a.test', ' Row  One '),
+        row(null, 'https://b.test', 'Row Two'),
+        row('third', 'https://c.test', 'Row Three'),
+      ],
+    }
+    interface ExtractListOutcome { rows: Record<string, string>[]; total: number }
+    type ExtractListPage = (selector: string, fields: unknown, limit: number, maxFieldChars: number) => ExtractListOutcome
+    // instanceof needs callables with prototypes; stub rows are plain objects.
+    function FakeInputElement() {}
+    function FakeTextAreaElement() {}
+    // oxlint-disable-next-line typescript/no-implied-eval -- re-runs the serialized extract-list source against a DOM stub
+    const evaluate = new Function(
+      'document',
+      'HTMLInputElement',
+      'HTMLTextAreaElement',
+      `return (${String(pageFunction)})`,
+    ) as (document: unknown, input: unknown, textarea: unknown) => ExtractListPage
+    const run = evaluate(stub, FakeInputElement, FakeTextAreaElement)
+    const result = run('.row', {
+      title: { selector: 'h3' },
+      link: { selector: 'a', attribute: 'href' },
+      rowText: {},
+    }, 2, 200)
+    // Whitespace collapses, a missing descendant omits the field, and only
+    // `limit` rows are materialized while `total` reports the full match count.
+    expect(result).toEqual({
+      rows: [
+        { title: 'First Result', link: 'https://a.test', rowText: 'Row One' },
+        { link: 'https://b.test', rowText: 'Row Two' },
+      ],
+      total: 3,
+    })
+    await provider.dispose()
+  })
+})
+
+describe('PuppeteerBrowserProvider wait', () => {
+  it('resolves with the page status once the selector appears', async () => {
+    page.waitForSelector.mockResolvedValueOnce({})
+    const provider = await opened()
+    const status = await provider.wait(pageKey, { selector: '#rso h3', timeoutMs: 1000 })
+    expect(status).toEqual({ url: 'https://page.test/final', title: 'Fake Title', statusCode: 200 })
+    await provider.dispose()
+  })
+
+  it('reports BROWSER_TIMEOUT when the selector never appears', async () => {
+    page.waitForSelector.mockRejectedValueOnce(new TimeoutError('Timed out'))
+    const provider = await opened()
+    await expect(provider.wait(pageKey, { selector: '#rso h3', timeoutMs: 500 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_TIMEOUT' }))
+    await provider.dispose()
+  })
+
+  it('reports BROWSER_TIMEOUT when the wait resolves with no element', async () => {
+    page.waitForSelector.mockResolvedValueOnce(null)
+    const provider = await opened()
+    await expect(provider.wait(pageKey, { selector: '#rso h3', timeoutMs: 500 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_TIMEOUT' }))
+    await provider.dispose()
+  })
+
+  it('maps a generic wait failure through the read taxonomy', async () => {
+    page.waitForSelector.mockRejectedValueOnce(new Error('page is gone'))
+    const provider = await opened()
+    await expect(provider.wait(pageKey, { selector: '#x', timeoutMs: 500 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
+    await provider.dispose()
+  })
+
+  it('settles the current navigation without a selector and stays best-effort', async () => {
+    page.waitForNetworkIdle.mockRejectedValueOnce(new TimeoutError('Timed out'))
+    const provider = await opened()
+    const status = await provider.wait(pageKey, { timeoutMs: 500 })
+    expect(page.waitForNetworkIdle).toHaveBeenCalledWith({ idleTime: 200, timeout: 500 })
+    expect(status.url).toBe('https://page.test/final')
+    await provider.dispose()
+  })
+})
+
+describe('PuppeteerBrowserProvider page setup', () => {
+  it('applies the configured user agent and viewport to a new page', async () => {
+    const provider = new PuppeteerBrowserProvider(providerOptions({ userAgent: 'TestUA/9.9', viewportWidth: 1024, viewportHeight: 768 }))
+    await provider.navigate(pageKey, { url: 'https://example.com' })
+    expect(page.setUserAgent).toHaveBeenCalledWith({ userAgent: 'TestUA/9.9' })
+    expect(page.setViewport).toHaveBeenCalledWith({ width: 1024, height: 768 })
+    await provider.dispose()
+  })
+
+  it('leaves the browser user agent alone when unconfigured but still sizes the viewport', async () => {
+    const provider = new PuppeteerBrowserProvider(providerOptions())
+    await provider.navigate(pageKey, { url: 'https://example.com' })
+    expect(page.setUserAgent).not.toHaveBeenCalled()
+    expect(page.setViewport).toHaveBeenCalledWith({ width: 1280, height: 800 })
+    await provider.dispose()
+  })
 })
 
 describe('PuppeteerBrowserProvider lifecycle', () => {
@@ -385,9 +703,12 @@ describe('PuppeteerBrowserProvider lifecycle', () => {
     const provider = new PuppeteerBrowserProvider(providerOptions({ log: message => logs.push(message) }))
     await expect(provider.navigate(pageKey, { url: 'https://example.com' })).resolves.toMatchObject({ statusCode: 200 })
     expect(launchMock).toHaveBeenCalledTimes(2)
+    const firstArgs = (launchMock.mock.calls[0]![0] as { args: string[] }).args
+    expect(firstArgs).toContain('--disable-blink-features=AutomationControlled')
     const retryArgs = (launchMock.mock.calls[1]![0] as { args: string[] }).args
     expect(retryArgs).toContain('--no-sandbox')
     expect(retryArgs).toContain('--disable-setuid-sandbox')
+    expect(retryArgs).toContain('--disable-blink-features=AutomationControlled')
     expect(logs.join('\n')).toContain('WITHOUT Chrome')
     await provider.dispose()
   })

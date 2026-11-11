@@ -15,7 +15,7 @@ Build a professional research report on a topic using the user's real Chrome bro
 
 ## If the chrome tools are unavailable
 
-If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), do not start the pipeline: the deep article fetch that makes this a real report requires the browser, and a snippet-only report is a failed report by this skill's own standard. Report that the research report cannot be produced because the mcp-chrome bridge is not running. Do not begin searching or write a degraded report.
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started): if the managed `browser_*` tools are in the catalog, run the `headless-research-report` skill instead — the same pipeline on the anonymous headless browser. Otherwise do not start the pipeline: the deep article fetch that makes this a real report requires a browser, and a snippet-only report is a failed report by this skill's own standard. Report that the research report cannot be produced because the mcp-chrome bridge is not running. Do not begin searching or write a degraded report.
 
 ## Pipeline
 

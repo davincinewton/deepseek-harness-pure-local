@@ -3,8 +3,9 @@
  * a real Chrome Headless Shell through the plugin's own `provision: auto`
  * path, then drives a local fixture page through the full seam: navigate,
  * snapshot with accessible names, fill and click via `::-p-aria`/`::-p-text`,
- * extract, and PNG screenshot. Skipped by default so CI and offline runs are
- * unaffected.
+ * extract, structured extract-list, an indexed click among visible matches,
+ * selector/navigation waits, and PNG screenshot. Skipped by default so CI and
+ * offline runs are unaffected.
  */
 
 import { createServer, type Server } from 'node:http'
@@ -30,6 +31,17 @@ const PAGE_B = `<!doctype html><html><head><title>Fixture B</title></head><body>
 <p id="quote">The title of this fixture page is B.</p>
 </body></html>`
 
+// Three visible rows and one display:none row; the hash in each href lets an
+// indexed click prove which match it chose.
+const PAGE_ROWS = `<!doctype html><html><head><title>Rows</title></head><body>
+<ul>
+  <li class="row"><h3>  First    result </h3><a href="/b#one">one</a></li>
+  <li class="row"><h3>Second result</h3><a href="/b#two">two</a></li>
+  <li class="row" style="display:none"><h3>Hidden result</h3><a href="/b#hidden">hidden</a></li>
+  <li class="row"><h3>Third result</h3><a href="/b#three">three</a></li>
+</ul>
+</body></html>`
+
 let server: Server | undefined
 let baseUrl = ''
 let ctx: Context | undefined
@@ -39,7 +51,8 @@ beforeAll(async () => {
   if (!REAL) return
   server = createServer((req, res) => {
     res.setHeader('content-type', 'text/html')
-    res.end(req.url?.startsWith('/b') ? PAGE_B : PAGE_A)
+    if (req.url?.startsWith('/rows') === true) res.end(PAGE_ROWS)
+    else res.end(req.url?.startsWith('/b') === true ? PAGE_B : PAGE_A)
   })
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -90,6 +103,38 @@ describe.skipIf(!REAL)('real Chrome Headless Shell through the seam', () => {
     await browser.close(pageKey)
     await expect(browser.snapshot(pageKey, { maxTextChars: 100, maxElements: 5 }))
       .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_NO_PAGE' }))
+  }, 300_000)
+
+  it('reads structured rows, waits, and clicks the Nth visible match', async () => {
+    const browser = ctx!.browser
+    const key = BrowserPageKey('e2e-2')
+    await browser.navigate(key, { url: `${baseUrl}/rows`, waitUntil: 'domcontentloaded' })
+
+    const rows = await browser.extractList(key, {
+      selector: '.row',
+      fields: { title: { selector: 'h3' }, link: { selector: 'a', attribute: 'href' } },
+      limit: 8,
+      maxFieldChars: 100,
+    })
+    // Extraction projects every match (visibility-filtering is the act's job);
+    // whitespace inside the h3 collapses and attributes project directly.
+    expect(rows).toMatchObject({ count: 4, truncated: false })
+    expect(rows.rows[0]).toEqual({ title: 'First result', link: '/b#one' })
+
+    const capped = await browser.extractList(key, {
+      selector: '.row', fields: { title: { selector: 'h3' } }, limit: 2, maxFieldChars: 5,
+    })
+    expect(capped.count).toBe(2)
+    expect(capped.truncated).toBe(true)
+
+    await browser.wait(key, { selector: '.row a', timeoutMs: 5000 })
+    // The second VISIBLE row skips the display:none third match.
+    await browser.act(key, { action: 'click', target: '.row a', index: 1 })
+    const landed = await browser.wait(key, { timeoutMs: 5000 })
+    expect(landed.url).toBe(`${baseUrl}/b#two`)
+    expect(landed.title).toBe('Fixture B')
+
+    await browser.close(key)
   }, 300_000)
 
   it('blocks non-loopback-private and file targets even when loopback is allowed', async () => {

@@ -68,6 +68,13 @@ function fakeProvider(overrides: Partial<BrowserProvider> = {}): BrowserProvider
     snapshot: () => Promise.resolve({ url: 'https://x.test', title: 'T', statusCode: 200, text: 'visible text', elements: [{ role: 'link', name: 'Home' }], truncated: false }),
     act: (_key, request) => Promise.resolve({ url: `acted:${request.action}:${request.target}`, title: 'T', statusCode: null }),
     extract: (_key, request) => Promise.resolve({ url: 'https://x.test', text: 'x'.repeat(Math.min(request.maxChars, 50)), truncated: false }),
+    extractList: (_key, request) => Promise.resolve({
+      url: 'https://x.test',
+      rows: Array.from({ length: Math.min(request.limit, 3) }, (_element, index) => ({ title: `R${index}`, href: `https://x.test/${index}` })),
+      count: Math.min(request.limit, 3),
+      truncated: false,
+    }),
+    wait: (_key, request) => Promise.resolve({ url: `waited:${request.selector ?? 'idle'}`, title: 'T', statusCode: 200 }),
     screenshot: () => Promise.resolve({ url: 'https://x.test', data: new Uint8Array(10), mediaType: 'image/png', bytes: 10, width: 100, height: 50 }),
     close: () => Promise.resolve(),
     ...overrides,
@@ -120,23 +127,30 @@ beforeEach(() => {
 })
 
 describe('tool-browser registration', () => {
-  it('registers all six tools by default', async () => {
+  it('registers all eight tools by default', async () => {
     const { ctx } = await mountTools()
-    for (const name of ['browser_navigate', 'browser_snapshot', 'browser_act', 'browser_extract', 'browser_screenshot', 'browser_close']) {
+    for (const name of ['browser_navigate', 'browser_snapshot', 'browser_act', 'browser_extract', 'browser_extract_list', 'browser_wait', 'browser_screenshot', 'browser_close']) {
       expect(ctx.tools.get(name), name).toBeDefined()
     }
   })
 
   it('omits tools disabled by config and screenshot without an attachments store', async () => {
-    const { ctx } = await mountTools({ config: { act: false, extract: false }, attachments: false })
+    const { ctx } = await mountTools({ config: { act: false, extract: false, extractList: false, wait: false }, attachments: false })
     expect(ctx.tools.get('browser_act')).toBeUndefined()
     expect(ctx.tools.get('browser_extract')).toBeUndefined()
+    expect(ctx.tools.get('browser_extract_list')).toBeUndefined()
+    expect(ctx.tools.get('browser_wait')).toBeUndefined()
     expect(ctx.tools.get('browser_screenshot')).toBeUndefined()
     expect(ctx.tools.get('browser_navigate')).toBeDefined()
   })
 
   it('has no default export (namespace plugin export shape)', () => {
     expect('default' in ToolBrowser).toBe(false)
+  })
+
+  it('refuses a waitToolTimeoutMs not exceeding waitTimeoutMs at mount', async () => {
+    await expect(mountTools({ config: { waitTimeoutMs: 1000, waitToolTimeoutMs: 900 } }))
+      .rejects.toThrow('waitToolTimeoutMs must exceed waitTimeoutMs')
   })
 })
 
@@ -195,6 +209,90 @@ describe('browser_snapshot / browser_extract', () => {
   })
 })
 
+describe('browser_extract_list', () => {
+  it('projects rows onto named fields and renders one line per row', async () => {
+    const { call } = await mountTools()
+    const result = await call('browser_extract_list', {
+      selector: '#rso > div',
+      fields: { title: { selector: 'a h3' }, href: { selector: 'a', attribute: 'href' } },
+    })
+    expect(result.isError).toBeFalsy()
+    const text = textOf(result)
+    expect(text).toContain('Rows from https://x.test (3)')
+    expect(text).toContain('title=R0 | href=https://x.test/0')
+  })
+
+  it('applies the configured default and hard row caps', async () => {
+    const seen: number[] = []
+    const { call } = await mountTools({
+      config: { extractListDefaultLimit: 4, extractListMaxLimit: 6 },
+      provider: fakeProvider({ extractList: (_k, request) => {
+        seen.push(request.limit)
+        return Promise.resolve({ url: 'https://x.test', rows: [], count: 0, truncated: false })
+      } }),
+    })
+    await call('browser_extract_list', { selector: 'li', fields: { title: {} } })
+    await call('browser_extract_list', { selector: 'li', fields: { title: {} }, limit: 99 })
+    expect(seen).toEqual([4, 6])
+  })
+
+  it('refuses a non-positive limit or maxFieldChars', async () => {
+    const { call } = await mountTools()
+    expect((await call('browser_extract_list', { selector: 'li', fields: { title: {} }, limit: 0 })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: 'li', fields: { title: {} }, maxFieldChars: 0 })).isError).toBe(true)
+  })
+
+  it('refuses malformed field maps before touching the page', async () => {
+    const { call } = await mountTools()
+    expect((await call('browser_extract_list', { selector: 'li', fields: { href: { attribute: 'href' } } })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: 'li', fields: {} })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: 'li', fields: { title: 'plain string' } })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: 'li', fields: { title: ['h3'] } })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: 'li', fields: { title: null } })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: 'li', fields: { title: { selector: 12 } } })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: 'li', fields: { title: { selector: 'h3', attribute: 7 } } })).isError).toBe(true)
+    expect((await call('browser_extract_list', { selector: '  ', fields: { title: {} } })).isError).toBe(true)
+  })
+
+  it('flags truncated rows and empty results in the render', async () => {
+    const { call } = await mountTools({
+      provider: fakeProvider({ extractList: (_k, request) => request.selector === 'empty'
+        ? Promise.resolve({ url: 'https://x.test', rows: [], count: 0, truncated: false })
+        : Promise.resolve({ url: 'https://x.test', rows: [{ title: 'A' }], count: 1, truncated: true }) }),
+    })
+    expect(textOf(await call('browser_extract_list', { selector: 'li', fields: { title: {} } }))).toContain('(truncated')
+    expect(textOf(await call('browser_extract_list', { selector: 'empty', fields: { title: {} } }))).toContain('(no rows matched)')
+  })
+})
+
+describe('browser_wait', () => {
+  it('waits for a selector and renders the settled status', async () => {
+    const { call } = await mountTools()
+    const result = await call('browser_wait', { selector: '#rso h3' })
+    expect(result.isError).toBeFalsy()
+    expect(textOf(result)).toContain('Waited: waited:#rso h3 (HTTP 200)')
+  })
+
+  it('caps the wait budget to the configured deployment limit', async () => {
+    const seen: number[] = []
+    const { call } = await mountTools({
+      config: { waitTimeoutMs: 900, waitToolTimeoutMs: 1200 },
+      provider: fakeProvider({ wait: (_k, request) => {
+        seen.push(request.timeoutMs)
+        return Promise.resolve({ url: 'u', title: 't', statusCode: null })
+      } }),
+    })
+    await call('browser_wait', { timeoutMs: 5000 })
+    await call('browser_wait', {})
+    expect(seen).toEqual([900, 900])
+  })
+
+  it('refuses a non-positive timeoutMs', async () => {
+    const { call } = await mountTools()
+    expect((await call('browser_wait', { timeoutMs: 0 })).isError).toBe(true)
+  })
+})
+
 describe('browser_act approval gate', () => {
   it('asks the approval seam and runs only on allowed-once', async () => {
     const { approval, call } = await mountTools()
@@ -230,6 +328,22 @@ describe('browser_act approval gate', () => {
     const result = await call('browser_act', { action: 'click', target: 'a' }, visionAgent)
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('no approval service is mounted')
+  })
+
+  it('passes an indexed target through the gate reason and the provider request', async () => {
+    const { approval, call } = await mountTools({
+      provider: fakeProvider({ act: (_k, request) => Promise.resolve({ url: `acted:${request.action}:${request.index ?? 'none'}`, title: 'T', statusCode: null }) }),
+    })
+    const result = await call('browser_act', { action: 'click', target: 'li.r', index: 2 }, visionAgent)
+    expect(textOf(result)).toContain('acted:click:2')
+    expect(approval!.calls[0]!.reason).toContain('"li.r" #2')
+  })
+
+  it('rejects a negative or fractional index before the approval gate', async () => {
+    const { approval, call } = await mountTools()
+    expect((await call('browser_act', { action: 'click', target: 'a', index: -1 }, visionAgent)).isError).toBe(true)
+    expect((await call('browser_act', { action: 'click', target: 'a', index: 1.5 }, visionAgent)).isError).toBe(true)
+    expect(approval!.calls).toHaveLength(0)
   })
 })
 
@@ -279,6 +393,13 @@ describe('presentation', () => {
     expect(tool.presentCall!({ url: 'https://x.test' })).toMatchObject({ card: 'generic', title: 'Browse https://x.test', kind: 'fetch' })
     const act = ctx.tools.get('browser_act')!
     expect(act.presentCall!({ action: 'click', target: 'a' })).toMatchObject({ card: 'generic', title: 'Browse click a', kind: 'execute' })
+    const list = ctx.tools.get('browser_extract_list')!
+    expect(list.presentCall!({ selector: '#rso', fields: {} })).toMatchObject({ card: 'generic', title: 'Extract list #rso', kind: 'read', rawInput: '#rso' })
+    expect(list.isConcurrencySafe!({ selector: '#rso', fields: { title: {} } })).toBe(false)
+    const wait = ctx.tools.get('browser_wait')!
+    expect(wait.presentCall!({})).toMatchObject({ title: 'Wait for navigation' })
+    expect(wait.presentCall!({ selector: '#x' })).toMatchObject({ title: 'Wait for #x', rawInput: '#x' })
+    expect(wait.isConcurrencySafe!({})).toBe(false)
   })
 
   it('carries a BrowserError code through failed results', async () => {

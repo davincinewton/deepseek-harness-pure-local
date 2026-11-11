@@ -21,6 +21,13 @@ function makeProvider(id: string, available: boolean, overrides: Partial<Browser
     snapshot: () => Promise.resolve({ url: 'https://x.test', title: id, statusCode: 200, text: 'full page text', elements: [], truncated: false }),
     act: () => Promise.resolve({ url: 'https://x.test', title: id, statusCode: null }),
     extract: () => Promise.resolve({ url: 'https://x.test', text: 'extracted', truncated: false }),
+    extractList: () => Promise.resolve({
+      url: 'https://x.test',
+      rows: [{ title: 'A long first title value' }, { title: 'B' }, { title: 'C' }],
+      count: 3,
+      truncated: false,
+    }),
+    wait: () => Promise.resolve({ url: 'https://x.test', title: id, statusCode: null }),
     screenshot: () => Promise.resolve({ url: 'https://x.test', data: new Uint8Array(), mediaType: 'image/png', bytes: 0, width: 1, height: 1 }),
     close: () => Promise.resolve(),
     ...overrides,
@@ -100,6 +107,59 @@ describe('BrowserRuntime caps', () => {
     }))
     const result = await browser.extract(pageKey, { maxChars: 3 })
     expect(result).toEqual({ url: 'https://x.test', text: '012', truncated: true })
+  })
+
+  it('caps extract-list rows and field values and flags either cut', async () => {
+    const { browser } = await mountBrowser()
+    browser.registerProvider(makeProvider('stub', true))
+    const result = await browser.extractList(pageKey, {
+      selector: 'li', fields: { title: {} }, limit: 2, maxFieldChars: 6,
+    })
+    expect(result.count).toBe(2)
+    expect(result.truncated).toBe(true)
+    expect(result.rows).toEqual([
+      { title: 'A long' },
+      { title: 'B' },
+    ])
+  })
+
+  it('passes an extract-list within the caps through untouched', async () => {
+    const { browser } = await mountBrowser()
+    browser.registerProvider(makeProvider('stub', true))
+    const result = await browser.extractList(pageKey, {
+      selector: 'li', fields: { title: {} }, limit: 10, maxFieldChars: 100,
+    })
+    expect(result.count).toBe(3)
+    expect(result.truncated).toBe(false)
+  })
+
+  it('cuts only the oversized fields when every row fits the limit', async () => {
+    const { browser } = await mountBrowser()
+    browser.registerProvider(makeProvider('stub', true))
+    const result = await browser.extractList(pageKey, {
+      selector: 'li', fields: { title: {} }, limit: 10, maxFieldChars: 6,
+    })
+    expect(result.count).toBe(3)
+    expect(result.truncated).toBe(true)
+    expect(result.rows).toEqual([
+      { title: 'A long' },
+      { title: 'B' },
+      { title: 'C' },
+    ])
+  })
+
+  it('waits through the selected provider and propagates unavailability', async () => {
+    const { browser } = await mountBrowser()
+    browser.registerProvider(makeProvider('stub', true, {
+      wait: (_key, request) => Promise.resolve({ url: `waited:${request.selector ?? 'idle'}`, title: 't', statusCode: null }),
+    }))
+    await expect(browser.wait(pageKey, { selector: '#x', timeoutMs: 10 }))
+      .resolves.toMatchObject({ url: 'waited:#x' })
+    const { browser: empty } = await mountBrowser()
+    await expect(empty.wait(pageKey, { timeoutMs: 10 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_UNAVAILABLE' }))
+    await expect(empty.extractList(pageKey, { selector: 'li', fields: {}, limit: 1, maxFieldChars: 1 }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_UNAVAILABLE' }))
   })
 
   it('preserves a provider-flagged truncation the caps did not touch', async () => {

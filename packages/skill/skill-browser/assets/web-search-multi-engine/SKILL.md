@@ -23,7 +23,7 @@ DuckDuckGo's HTML endpoint is the deliberate third engine: no JS rendering, no a
 
 ## If the chrome tools are unavailable
 
-If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started), this skill cannot run: cross-engine corroboration and URL/full-text resolution require the real browser, which the built-in `web_search` tool does not provide. Report that the capability is unavailable because the mcp-chrome bridge is not running, and offer `web_search` as a degraded alternative (single engine, snippets only). Do not retry chrome calls or loop.
+If no `mcp__chrome__*` tool exists in this session's tool catalog (the mcp-chrome bridge was not running when the session started): if the managed `browser_*` tools are in the catalog, use the `headless-multi-engine-search` skill instead — same merge and manifest contract on the anonymous headless browser. Otherwise this skill cannot run: cross-engine corroboration and URL/full-text resolution require a browser, which the built-in `web_search` tool does not provide. Report that the capability is unavailable because the mcp-chrome bridge is not running, and offer `web_search` as a degraded alternative (single engine, snippets only). Do not retry chrome calls or loop.
 
 ## Rules
 

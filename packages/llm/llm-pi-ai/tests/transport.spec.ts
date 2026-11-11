@@ -44,7 +44,7 @@ describe('pulsingFetch', () => {
   })
 
   it('forwards the request unchanged, including its signal', async () => {
-    const seen: { input: RequestInfo | URL; init?: RequestInit }[] = []
+    const seen: { input: RequestInfo | URL; init: RequestInit | undefined }[] = []
     const controller = new AbortController()
     await pulsingFetch((input, init) => {
       seen.push({ input, init })

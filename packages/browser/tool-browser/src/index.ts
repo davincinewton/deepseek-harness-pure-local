@@ -18,20 +18,24 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import {
   applyBrowserActTool,
   applyBrowserCloseTool,
+  applyBrowserExtractListTool,
   applyBrowserExtractTool,
   applyBrowserNavigateTool,
   applyBrowserScreenshotTool,
   applyBrowserSnapshotTool,
+  applyBrowserWaitTool,
 } from './tools.ts'
 import type { BrowserToolOptions } from './tools.ts'
 
 export {
   applyBrowserActTool,
   applyBrowserCloseTool,
+  applyBrowserExtractListTool,
   applyBrowserExtractTool,
   applyBrowserNavigateTool,
   applyBrowserScreenshotTool,
   applyBrowserSnapshotTool,
+  applyBrowserWaitTool,
   derivePageKey,
 } from './tools.ts'
 export type { BrowserToolOptions } from './tools.ts'
@@ -60,6 +64,10 @@ export interface Config {
   act?: boolean
   /** Register `browser_extract`. Defaults to true. */
   extract?: boolean
+  /** Register `browser_extract_list`. Defaults to true. */
+  extractList?: boolean
+  /** Register `browser_wait`. Defaults to true. */
+  wait?: boolean
   /** Register `browser_screenshot` (requires a mounted attachments store). Defaults to true. */
   screenshot?: boolean
   /** Register `browser_close`. Defaults to true. */
@@ -80,6 +88,18 @@ export interface Config {
   snapshotMaxElements?: number
   /** Default and hard cap on `browser_extract` characters. Defaults to 100000. */
   extractMaxChars?: number
+  /** Default row cap for `browser_extract_list`. Defaults to 8. */
+  extractListDefaultLimit?: number
+  /** Hard row cap for `browser_extract_list`. Defaults to 50. */
+  extractListMaxLimit?: number
+  /** Default per-field character cap for `browser_extract_list`. Defaults to 200. */
+  extractListFieldChars?: number
+  /** Hard per-field character cap for `browser_extract_list`. Defaults to 2000. */
+  extractListMaxFieldChars?: number
+  /** Provider-side wait budget for `browser_wait` (ms). Defaults to 20000. */
+  waitTimeoutMs?: number
+  /** Cooperative tool budget for `browser_wait` (ms); must exceed `waitTimeoutMs`. Defaults to 25000. */
+  waitToolTimeoutMs?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -87,6 +107,8 @@ export const Config: z<Config> = z.object({
   snapshot: z.boolean().default(true),
   act: z.boolean().default(true),
   extract: z.boolean().default(true),
+  extractList: z.boolean().default(true),
+  wait: z.boolean().default(true),
   screenshot: z.boolean().default(true),
   close: z.boolean().default(true),
   actRequiresApproval: z.boolean().default(true),
@@ -97,6 +119,12 @@ export const Config: z<Config> = z.object({
   snapshotMaxTextChars: z.number().default(20_000),
   snapshotMaxElements: z.number().default(120),
   extractMaxChars: z.number().default(100_000),
+  extractListDefaultLimit: z.number().default(8),
+  extractListMaxLimit: z.number().default(50),
+  extractListFieldChars: z.number().default(200),
+  extractListMaxFieldChars: z.number().default(2000),
+  waitTimeoutMs: z.number().default(20_000),
+  waitToolTimeoutMs: z.number().default(25_000),
 })
 
 /** Complete config after schemastery applies every field default. */
@@ -126,6 +154,15 @@ export function apply(ctx: Context, config: Config): void {
   assertPositiveInteger('snapshotMaxTextChars', resolved.snapshotMaxTextChars)
   assertPositiveInteger('snapshotMaxElements', resolved.snapshotMaxElements)
   assertPositiveInteger('extractMaxChars', resolved.extractMaxChars)
+  assertPositiveInteger('extractListDefaultLimit', resolved.extractListDefaultLimit)
+  assertPositiveInteger('extractListMaxLimit', resolved.extractListMaxLimit)
+  assertPositiveInteger('extractListFieldChars', resolved.extractListFieldChars)
+  assertPositiveInteger('extractListMaxFieldChars', resolved.extractListMaxFieldChars)
+  assertPositiveInteger('waitTimeoutMs', resolved.waitTimeoutMs)
+  assertPositiveInteger('waitToolTimeoutMs', resolved.waitToolTimeoutMs)
+  if (resolved.waitToolTimeoutMs <= resolved.waitTimeoutMs) {
+    throw new Error('tool-browser: waitToolTimeoutMs must exceed waitTimeoutMs (the provider wait must time out before the tool budget)')
+  }
   const options: BrowserToolOptions = {
     actRequiresApproval: resolved.actRequiresApproval,
     navigateTimeoutMs: resolved.navigateTimeoutMs,
@@ -135,12 +172,18 @@ export function apply(ctx: Context, config: Config): void {
     snapshotMaxTextChars: resolved.snapshotMaxTextChars,
     snapshotMaxElements: resolved.snapshotMaxElements,
     extractMaxChars: resolved.extractMaxChars,
+    extractListDefaultLimit: resolved.extractListDefaultLimit,
+    extractListMaxLimit: resolved.extractListMaxLimit,
+    extractListFieldChars: resolved.extractListFieldChars,
+    extractListMaxFieldChars: resolved.extractListMaxFieldChars,
+    waitTimeoutMs: resolved.waitTimeoutMs,
+    waitToolTimeoutMs: resolved.waitToolTimeoutMs,
   }
 
   ctx.systemPrompt.section({
     name: 'tool:browser',
     order: 115,
-    text: 'Use the browser_* tools to drive one managed headless browser page for this session: browser_navigate opens an HTTP(S) URL, browser_snapshot returns the page text plus interactive elements (address elements back as ::-p-aria(<exact name>)), browser_act clicks/fills/presses/selects one element, browser_extract reads page or element text, browser_screenshot captures the page as an image, and browser_close releases the page.',
+    text: 'Use the browser_* tools to drive one managed headless browser page for this session: browser_navigate opens an HTTP(S) URL, browser_snapshot returns the page text plus interactive elements (address elements back as ::-p-aria(<exact name>)), browser_act clicks/fills/presses/selects one element (optionally by 0-based index among matches), browser_wait waits for a selector or settles a navigation, browser_extract reads page or element text, browser_extract_list reads a repeated list as structured rows, browser_screenshot captures the page as an image, and browser_close releases the page.',
   })
 
   if (resolved.navigate) applyBrowserNavigateTool(ctx, options)
@@ -170,6 +213,8 @@ export function apply(ctx: Context, config: Config): void {
       : undefined)
   }
   if (resolved.extract) applyBrowserExtractTool(ctx, options)
+  if (resolved.extractList) applyBrowserExtractListTool(ctx, options)
+  if (resolved.wait) applyBrowserWaitTool(ctx, options)
   if (resolved.screenshot) {
     // Image blocks reference durable attachments; without a store the tool
     // cannot honor its output contract, so it is not registered at all

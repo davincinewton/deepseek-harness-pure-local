@@ -3,8 +3,9 @@
  * the provider registry and provider-selecting page operations. Duplicate ids are
  * rejected. At execution time, a configured provider must exist and be usable;
  * without one, exactly one usable provider is required, so selection never
- * depends on registration order. The seam enforces snapshot and extract caps on
- * provider results so a provider cannot overflow the Consumer's model budget.
+ * depends on registration order. The seam enforces snapshot, extract, and
+ * extract-list caps on provider results so a provider cannot overflow the
+ * Consumer's model budget.
  * @module @deepseek-ai/dsh-browser
  */
 
@@ -13,6 +14,8 @@ import z from '@deepseek-ai/schemastery'
 import type {
   BrowserActRequest,
   BrowserActResult,
+  BrowserExtractListRequest,
+  BrowserExtractListResult,
   BrowserExtractRequest,
   BrowserExtractResult,
   BrowserNavigateRequest,
@@ -22,6 +25,8 @@ import type {
   BrowserScreenshotResult,
   BrowserSnapshotLimits,
   BrowserSnapshotResult,
+  BrowserWaitRequest,
+  BrowserWaitResult,
 } from './types.ts'
 import { BrowserError, BrowserPageKey } from './types.ts'
 
@@ -33,6 +38,9 @@ export type {
   BrowserActionKind,
   BrowserActRequest,
   BrowserActResult,
+  BrowserExtractListField,
+  BrowserExtractListRequest,
+  BrowserExtractListResult,
   BrowserExtractRequest,
   BrowserExtractResult,
   BrowserNavigateRequest,
@@ -44,6 +52,8 @@ export type {
   BrowserSnapshotElement,
   BrowserSnapshotLimits,
   BrowserSnapshotResult,
+  BrowserWaitRequest,
+  BrowserWaitResult,
   BrowserWaitUntil,
 } from './types.ts'
 
@@ -168,6 +178,32 @@ export class BrowserRuntime extends Service {
   }
 
   /**
+   * Read every row matching `request.selector`, projected onto `request.fields`.
+   * The seam enforces the request caps on the provider result: rows are cut to
+   * `limit`, each field to `maxFieldChars`, and `truncated` reflects either cut.
+   * @param pageKey - the page owner.
+   * @param request - the row selector, field projection, and caps.
+   * @param signal - optional cancellation signal forwarded to the provider.
+   * @returns the structured rows bounded by the request caps.
+   */
+  async extractList(pageKey: BrowserPageKey, request: BrowserExtractListRequest, signal?: AbortSignal): Promise<BrowserExtractListResult> {
+    const result = await this.resolve().extractList(pageKey, request, signal)
+    return capExtractList(result, request)
+  }
+
+  /**
+   * Wait for a selector or for the current navigation to settle through the
+   * selected provider.
+   * @param pageKey - the page owner.
+   * @param request - the optional selector plus the provider-side wait budget.
+   * @param signal - optional cancellation signal forwarded to the provider.
+   * @returns the post-wait page status.
+   */
+  async wait(pageKey: BrowserPageKey, request: BrowserWaitRequest, signal?: AbortSignal): Promise<BrowserWaitResult> {
+    return this.resolve().wait(pageKey, request, signal)
+  }
+
+  /**
    * Capture the key's page as PNG through the selected provider.
    * @param pageKey - the page owner.
    * @param request - whether to capture beyond the viewport.
@@ -237,6 +273,22 @@ function capSnapshot(result: BrowserSnapshotResult, limits: BrowserSnapshotLimit
 function capExtract(result: BrowserExtractResult, maxChars: number): BrowserExtractResult {
   if (result.text.length <= maxChars) return result
   return { ...result, text: result.text.slice(0, maxChars), truncated: true }
+}
+
+/** Enforce the row and field caps on an extract-list result, flagging either cut. */
+function capExtractList(result: BrowserExtractListResult, request: BrowserExtractListRequest): BrowserExtractListResult {
+  const rowsCut = result.rows.length > request.limit
+  const fieldCut = result.rows.some(row => Object.values(row).some(value => value.length > request.maxFieldChars))
+  if (!rowsCut && !fieldCut) return result
+  const kept = rowsCut ? result.rows.slice(0, request.limit) : result.rows
+  const rows = kept.map((row) => {
+    const capped: Record<string, string> = {}
+    for (const [name, value] of Object.entries(row)) {
+      capped[name] = value.length > request.maxFieldChars ? value.slice(0, request.maxFieldChars) : value
+    }
+    return capped
+  })
+  return { ...result, rows, count: rows.length, truncated: true }
 }
 
 export default BrowserRuntime

@@ -16,8 +16,11 @@ import type { Browser as PuppeteerBrowser, ElementHandle, HTTPResponse, KeyInput
 import { TimeoutError } from 'puppeteer-core'
 import { BrowserError } from '@deepseek-ai/dsh-browser'
 import type {
+  BrowserActionKind,
   BrowserActRequest,
   BrowserActResult,
+  BrowserExtractListRequest,
+  BrowserExtractListResult,
   BrowserExtractRequest,
   BrowserExtractResult,
   BrowserNavigateRequest,
@@ -29,6 +32,8 @@ import type {
   BrowserScreenshotResult,
   BrowserSnapshotLimits,
   BrowserSnapshotResult,
+  BrowserWaitRequest,
+  BrowserWaitResult,
 } from '@deepseek-ai/dsh-browser'
 import { assertNavigationTargetAllowed, validateNavigateUrl } from './policy.ts'
 import type { NavigationPolicyOptions } from './policy.ts'
@@ -37,6 +42,15 @@ import type { ProvisionLog } from './provision.ts'
 
 /** Registry id of this provider kind. */
 export const PUPPETEER_PROVIDER_ID = 'puppeteer'
+
+/**
+ * Fixed launch posture, prepended to `chromeArgs`: drop the
+ * `navigator.webdriver` automation flag that search engines and news sites
+ * read before anything else (measured: with it set, Google answers the SERP
+ * with a 429 `/sorry` wall even under a plain-Chrome user agent). Not a
+ * tunable — every launch of the managed browser presents as a plain browser.
+ */
+const BASE_CHROME_ARGS = ['--disable-blink-features=AutomationControlled']
 
 /** Tunables the provider was constructed with (all resolved from plugin config). */
 export interface PuppeteerProviderOptions {
@@ -51,6 +65,12 @@ export interface PuppeteerProviderOptions {
   /** Empty = an ephemeral per-process profile directory, removed on dispose. */
   readonly userDataDir: string
   readonly chromeArgs: readonly string[]
+  /** Page user-agent override; empty = the browser's own headless user agent. */
+  readonly userAgent: string
+  /** Page viewport width in CSS pixels. */
+  readonly viewportWidth: number
+  /** Page viewport height in CSS pixels. */
+  readonly viewportHeight: number
   readonly navigationTimeoutMs: number
   readonly actionTimeoutMs: number
   /** Post-click wait for a follow-up navigation to settle (bounded, best-effort). */
@@ -139,6 +159,71 @@ const SNAPSHOT_PAGE_FUNCTION = new Function(
   SNAPSHOT_PAGE_SOURCE,
 ) as SnapshotPageFunction
 
+/** Data one extract-list evaluate returns; the provider maps it into the seam shape. */
+interface RawExtractList {
+  rows: Record<string, string>[]
+  total: number
+}
+
+/**
+ * Page-side extract-list body, kept as a string literal for the same transpile
+ * immunity as {@link SNAPSHOT_PAGE_SOURCE}. Every row matching `selector` is
+ * projected onto `fields`: a field reads the text of its descendant match (or
+ * of the row), or one attribute of it; a missing target omits the field.
+ */
+const EXTRACT_LIST_PAGE_SOURCE = `
+  const rows = []
+  const all = document.querySelectorAll(selector)
+  for (const el of all) {
+    if (rows.length >= limit) break
+    const row = {}
+    for (const name of Object.keys(fields)) {
+      const field = fields[name]
+      const target = field.selector === undefined ? el : el.querySelector(field.selector)
+      if (target === null) continue
+      let value
+      if (field.attribute !== undefined) value = target.getAttribute(field.attribute) ?? ''
+      else if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) value = target.value
+      else value = target.innerText
+      const collapsed = value.replace(/\\s+/g, ' ').trim()
+      row[name] = collapsed.length > maxFieldChars ? collapsed.slice(0, maxFieldChars) : collapsed
+    }
+    rows.push(row)
+  }
+  return { rows, total: all.length }
+`
+
+/** The page-side extract-list function's signature, as called by the provider. */
+type ExtractListPageFunction = (
+  selector: string,
+  fields: Record<string, { selector?: string; attribute?: string }>,
+  limit: number,
+  maxFieldChars: number,
+) => RawExtractList
+
+/** Compiled once; see {@link SNAPSHOT_PAGE_SOURCE} for why the body is a string. */
+// oxlint-disable-next-line typescript/no-implied-eval -- a string-compiled body is the only transpile-immune page function
+const EXTRACT_LIST_PAGE_FUNCTION = new Function(
+  'selector',
+  'fields',
+  'limit',
+  'maxFieldChars',
+  EXTRACT_LIST_PAGE_SOURCE,
+) as ExtractListPageFunction
+
+/** Page-side predicate: at least `index + 1` visible matches of `selector` exist. */
+const HAS_VISIBLE_MATCH_SOURCE = `
+  return [...document.querySelectorAll(selector)].filter(el => el.getClientRects().length > 0).length > index
+`
+
+/** Compiled once; see {@link SNAPSHOT_PAGE_SOURCE} for why the body is a string. */
+// oxlint-disable-next-line typescript/no-implied-eval -- a string-compiled body is the only transpile-immune page function
+const HAS_VISIBLE_MATCH_FUNCTION = new Function(
+  'selector',
+  'index',
+  HAS_VISIBLE_MATCH_SOURCE,
+) as (selector: string, index: number) => boolean
+
 /**
  * The Puppeteer page-operation provider. Registered by the
  * `@deepseek-ai/dsh-browser-puppeteer` plugin; usable directly by tests.
@@ -207,7 +292,12 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
   async navigate(pageKey: BrowserPageKey, request: BrowserNavigateRequest, signal?: AbortSignal): Promise<BrowserNavigateResult> {
     const url = validateNavigateUrl(request.url, this.#options.maxUrlLength)
     await assertNavigationTargetAllowed(url, this.#options.policy)
-    const page = await this.#page(pageKey, signal)
+    let page: Page
+    try {
+      page = await this.#page(pageKey, signal)
+    } catch (error: unknown) {
+      throw pageError(error)
+    }
     const waitUntil = request.waitUntil ?? 'load'
     let response: HTTPResponse | null
     try {
@@ -225,14 +315,19 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
   async snapshot(pageKey: BrowserPageKey, limits: BrowserSnapshotLimits, signal?: AbortSignal): Promise<BrowserSnapshotResult> {
     const page = await this.#requirePage(pageKey)
     const status = await this.#status(page)
-    const raw = await withCancellation(
-      page.evaluate(
-        SNAPSHOT_PAGE_FUNCTION,
-        this.#options.maxEvaluateTextChars,
-        limits.maxElements,
-      ),
-      signal,
-    )
+    let raw: RawSnapshot
+    try {
+      raw = await withCancellation(
+        page.evaluate(
+          SNAPSHOT_PAGE_FUNCTION,
+          this.#options.maxEvaluateTextChars,
+          limits.maxElements,
+        ),
+        signal,
+      )
+    } catch (error: unknown) {
+      throw readError(error)
+    }
     return {
       ...status,
       // The provider applies its own hard transport cap first; the seam caps
@@ -244,41 +339,51 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
   }
 
   async act(pageKey: BrowserPageKey, request: BrowserActRequest, signal?: AbortSignal): Promise<BrowserActResult> {
-    const { action, target, value } = request
+    const { action, target, value, index } = request
     if ((action === 'fill' || action === 'press' || action === 'select') && (value === undefined || value.length === 0)) {
       throw new BrowserError(`browser_act "${action}" requires a non-empty value`, 'BROWSER_ACTION_FAILED')
     }
     if (action === 'click' && value !== undefined) {
       throw new BrowserError('browser_act "click" takes no value', 'BROWSER_ACTION_FAILED')
     }
+    if (index !== undefined && (!Number.isInteger(index) || index < 0)) {
+      throw new BrowserError('browser_act index must be a non-negative integer', 'BROWSER_ACTION_FAILED')
+    }
     // The guards above make the empty default unreachable for value-taking actions.
     const actionValue = value ?? ''
     const page = await this.#requirePage(pageKey)
     const timeout = this.#options.actionTimeoutMs
     try {
-      if (action === 'click' || action === 'fill') {
-        // The Locator API is Puppeteer's native interaction surface: it waits
-        // for a visible, stable element and rejects with TimeoutError when
-        // none appears — the exact semantics this tool reports to the model.
-        const locator = page.locator(target).setTimeout(timeout)
-        if (action === 'click') {
-          await withCancellation(locator.click(), signal)
-          // Give a follow-up navigation a bounded moment; a page that never
-          // navigates simply waits out the settle window.
-          await page.waitForNetworkIdle({ idleTime: 100, timeout: this.#options.actionSettleMs }).catch(() => {})
+      if (index === undefined) {
+        if (action === 'click' || action === 'fill') {
+          // The Locator API is Puppeteer's native interaction surface: it waits
+          // for a visible, stable element and rejects with TimeoutError when
+          // none appears — the exact semantics this tool reports to the model.
+          const locator = page.locator(target).setTimeout(timeout)
+          if (action === 'click') {
+            await withCancellation(locator.click(), signal)
+            await this.#settle(page)
+          } else {
+            await withCancellation(locator.fill(actionValue), signal)
+          }
         } else {
-          await withCancellation(locator.fill(actionValue), signal)
+          const handle = await withCancellation(
+            page.waitForSelector(target, { visible: true, timeout }),
+            signal,
+          )
+          if (handle === null) {
+            throw new BrowserError(`no visible element matched "${target}" within ${timeout}ms`, 'BROWSER_TARGET_NOT_FOUND')
+          }
+          await this.#performOnHandle(page, handle, action, actionValue, signal)
         }
       } else {
-        const handle = await withCancellation(
-          page.waitForSelector(target, { visible: true, timeout }),
-          signal,
-        )
-        if (handle === null) {
-          throw new BrowserError(`no visible element matched "${target}" within ${timeout}ms`, 'BROWSER_TARGET_NOT_FOUND')
+        // Indexed addressing: the Nth visible match, mirroring querySelectorAll()[N].
+        const handle = await this.#nthVisibleHandle(page, target, index, timeout, signal)
+        try {
+          await this.#performOnHandle(page, handle, action, actionValue, signal)
+        } finally {
+          await handle.dispose().catch(() => {})
         }
-        if (action === 'press') await withCancellation(handle.press(actionValue as KeyInput), signal)
-        else await withCancellation(handle.select(actionValue), signal)
       }
     } catch (error: unknown) {
       if (error instanceof BrowserError) throw error
@@ -290,13 +395,74 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
     return this.#status(page)
   }
 
+  /** Perform one resolved action, then settle any navigation it started. */
+  async #performOnHandle(page: Page, handle: ElementHandle, action: BrowserActionKind, value: string, signal?: AbortSignal): Promise<void> {
+    if (action === 'click') {
+      await withCancellation(handle.click(), signal)
+      await this.#settle(page)
+      return
+    }
+    if (action === 'fill') {
+      // Triple-click selects existing text so the fill replaces it, like Locator.fill.
+      await withCancellation(handle.click({ count: 3 }), signal)
+      await withCancellation(page.keyboard.type(value), signal)
+      return
+    }
+    if (action === 'press') {
+      await withCancellation(handle.press(value as KeyInput), signal)
+      await this.#settle(page)
+      return
+    }
+    await withCancellation(handle.select(value), signal)
+  }
+
+  /** Give a follow-up navigation a bounded moment; a page that never navigates waits out the window. */
+  async #settle(page: Page): Promise<void> {
+    await page.waitForNetworkIdle({ idleTime: 100, timeout: this.#options.actionSettleMs }).catch(() => {})
+  }
+
+  /** The Nth visible match of `selector`, waiting up to `timeout` for it to appear. */
+  async #nthVisibleHandle(page: Page, selector: string, index: number, timeout: number, signal?: AbortSignal): Promise<ElementHandle> {
+    try {
+      await withCancellation(
+        page.waitForFunction(HAS_VISIBLE_MATCH_FUNCTION, { timeout }, selector, index),
+        signal,
+      )
+    } catch (error: unknown) {
+      if (error instanceof TimeoutError) {
+        throw new BrowserError(`no visible element matched "${selector}" at index ${index} within ${timeout}ms`, 'BROWSER_TARGET_NOT_FOUND', { cause: error })
+      }
+      throw error
+    }
+    const handles = await page.$$(selector)
+    const visible: ElementHandle[] = []
+    for (const handle of handles) {
+      const box = await handle.boundingBox()
+      if (box === null) await handle.dispose().catch(() => {})
+      else visible.push(handle)
+    }
+    const chosen = visible[index]
+    for (const [position, handle] of visible.entries()) {
+      if (position !== index) await handle.dispose().catch(() => {})
+    }
+    if (chosen === undefined) {
+      throw new BrowserError(`no visible element matched "${selector}" at index ${index}`, 'BROWSER_TARGET_NOT_FOUND')
+    }
+    return chosen
+  }
+
   async extract(pageKey: BrowserPageKey, request: BrowserExtractRequest, signal?: AbortSignal): Promise<BrowserExtractResult> {
     const page = await this.#requirePage(pageKey)
     if (request.selector === undefined) {
-      const text = await withCancellation(
-        page.evaluate(() => document.body.innerText),
-        signal,
-      )
+      let text: string
+      try {
+        text = await withCancellation(
+          page.evaluate(() => document.body.innerText),
+          signal,
+        )
+      } catch (error: unknown) {
+        throw readError(error)
+      }
       return { url: page.url(), text, truncated: false }
     }
     let handle: ElementHandle | null
@@ -309,21 +475,73 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
       if (error instanceof TimeoutError) {
         throw new BrowserError(`no element matched "${request.selector}"`, 'BROWSER_TARGET_NOT_FOUND', { cause: error })
       }
-      throw error
+      throw readError(error)
     }
     if (handle === null) {
       throw new BrowserError(`no element matched "${request.selector}"`, 'BROWSER_TARGET_NOT_FOUND')
     }
     const attribute = request.attribute
-    const text = await withCancellation(
-      handle.evaluate((el, attr) => {
-        if (attr !== null) return el.getAttribute(attr) ?? ''
-        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value
-        return (el as HTMLElement).innerText
-      }, attribute ?? null),
-      signal,
-    )
+    let text: string
+    try {
+      text = await withCancellation(
+        handle.evaluate((el, attr) => {
+          if (attr !== null) return el.getAttribute(attr) ?? ''
+          if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value
+          return (el as HTMLElement).innerText
+        }, attribute ?? null),
+        signal,
+      )
+    } catch (error: unknown) {
+      throw readError(error)
+    }
     return { url: page.url(), text, truncated: false }
+  }
+
+  async extractList(pageKey: BrowserPageKey, request: BrowserExtractListRequest, signal?: AbortSignal): Promise<BrowserExtractListResult> {
+    const page = await this.#requirePage(pageKey)
+    let raw: RawExtractList
+    try {
+      raw = await withCancellation(
+        page.evaluate(EXTRACT_LIST_PAGE_FUNCTION, request.selector, request.fields, request.limit, request.maxFieldChars),
+        signal,
+      )
+    } catch (error: unknown) {
+      throw readError(error)
+    }
+    return {
+      url: page.url(),
+      rows: raw.rows,
+      count: raw.rows.length,
+      truncated: raw.total > raw.rows.length,
+    }
+  }
+
+  async wait(pageKey: BrowserPageKey, request: BrowserWaitRequest, signal?: AbortSignal): Promise<BrowserWaitResult> {
+    const page = await this.#requirePage(pageKey)
+    const timeout = request.timeoutMs
+    try {
+      if (request.selector !== undefined) {
+        const handle = await withCancellation(
+          page.waitForSelector(request.selector, { visible: true, timeout }),
+          signal,
+        )
+        if (handle === null) {
+          throw new BrowserError(`no visible element matched "${request.selector}" within ${timeout}ms`, 'BROWSER_TIMEOUT')
+        }
+      } else {
+        // A navigation may have completed before the wait started, so network
+        // quiescence is the settle signal rather than a navigation event; a
+        // page that never quiesces simply waits out the window.
+        await withCancellation(page.waitForNetworkIdle({ idleTime: 200, timeout }), signal).catch(() => {})
+      }
+    } catch (error: unknown) {
+      if (error instanceof BrowserError) throw error
+      if (error instanceof TimeoutError) {
+        throw new BrowserError(`no visible element matched "${request.selector}" within ${timeout}ms`, 'BROWSER_TIMEOUT', { cause: error })
+      }
+      throw readError(error)
+    }
+    return this.#status(page)
   }
 
   async screenshot(pageKey: BrowserPageKey, request: BrowserScreenshotRequest, signal?: AbortSignal): Promise<BrowserScreenshotResult> {
@@ -405,11 +623,11 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
       protocolTimeout: this.#options.navigationTimeoutMs,
     })
     try {
-      return await launch([...this.#options.chromeArgs])
+      return await launch([...BASE_CHROME_ARGS, ...this.#options.chromeArgs])
     } catch (error: unknown) {
       if (!isSandboxUnavailable(error) || this.#options.chromeArgs.includes('--no-sandbox')) throw error
       this.#options.log?.('browser: this host denies Chrome its sandbox ("No usable sandbox"); retrying with --no-sandbox — page content runs WITHOUT Chrome\'s sandbox; enabling unprivileged user namespaces restores it')
-      return launch([...this.#options.chromeArgs, '--no-sandbox', '--disable-setuid-sandbox'])
+      return launch([...BASE_CHROME_ARGS, ...this.#options.chromeArgs, '--no-sandbox', '--disable-setuid-sandbox'])
     }
   }
 
@@ -419,6 +637,8 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
     const browser = await this.#browserPromise()
     const page = await withCancellation(browser.newPage(), signal)
     page.setDefaultTimeout(this.#options.actionTimeoutMs)
+    if (this.#options.userAgent.length > 0) await page.setUserAgent({ userAgent: this.#options.userAgent })
+    await page.setViewport({ width: this.#options.viewportWidth, height: this.#options.viewportHeight })
     page.on('response', (response: HTTPResponse) => {
       if (response.frame() === page.mainFrame()) this.#lastStatus.set(page, response.status())
     })
@@ -467,6 +687,29 @@ function navigationError(error: unknown): BrowserError {
     return new BrowserError('navigation timed out', 'BROWSER_TIMEOUT', { cause: error })
   }
   return new BrowserError('navigation failed', 'BROWSER_PROVIDER_ERROR', { cause: error })
+}
+
+/** Map a page-open failure (new page, dead browser connection) onto the shared taxonomy. */
+function pageError(error: unknown): BrowserError {
+  if (error instanceof BrowserError) return error
+  return new BrowserError('browser page could not be opened', 'BROWSER_PROVIDER_ERROR', { cause: error })
+}
+
+/**
+ * Map a page-read failure onto the shared taxonomy. A navigation or closure
+ * interrupting the read gets its own routable code so the model retries the
+ * read instead of re-navigating.
+ */
+function readError(error: unknown): BrowserError {
+  if (error instanceof BrowserError) return error
+  if (error instanceof TimeoutError) {
+    return new BrowserError('browser read timed out', 'BROWSER_TIMEOUT', { cause: error })
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  if (/Execution context was destroyed|Target closed|Connection closed|Inspected target navigated/i.test(message)) {
+    return new BrowserError('the page navigated or closed during the read; retry the operation', 'BROWSER_PAGE_CHANGED', { cause: error })
+  }
+  return new BrowserError('browser read failed', 'BROWSER_PROVIDER_ERROR', { cause: error })
 }
 
 /** Read width/height from a PNG's IHDR chunk. */

@@ -8,11 +8,11 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { GenericCallView, ToolCallKind, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { GenericCallView, JsonValue, ToolCallKind, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { BrowserPageKey } from '@deepseek-ai/dsh-browser'
-import type { BrowserActRequest, BrowserNavigateRequest, BrowserPageStatus, BrowserScreenshotRequest, BrowserSnapshotElement, BrowserSnapshotLimits } from '@deepseek-ai/dsh-browser'
+import type { BrowserActRequest, BrowserExtractListField, BrowserExtractListRequest, BrowserNavigateRequest, BrowserPageStatus, BrowserScreenshotRequest, BrowserSnapshotElement, BrowserSnapshotLimits, BrowserWaitRequest } from '@deepseek-ai/dsh-browser'
 import type {} from '@deepseek-ai/dsh-user-approval'
 
 /** Resolved Consumer budgets and gates (from plugin config). */
@@ -25,6 +25,12 @@ export interface BrowserToolOptions {
   readonly snapshotMaxTextChars: number
   readonly snapshotMaxElements: number
   readonly extractMaxChars: number
+  readonly extractListDefaultLimit: number
+  readonly extractListMaxLimit: number
+  readonly extractListFieldChars: number
+  readonly extractListMaxFieldChars: number
+  readonly waitTimeoutMs: number
+  readonly waitToolTimeoutMs: number
 }
 
 /**
@@ -242,6 +248,7 @@ export function applyBrowserActTool(
       action: { type: 'string', required: true, enum: ['click', 'fill', 'press', 'select'], description: 'The interaction to perform.' },
       target: { type: 'string', required: true, description: 'Element address: ::-p-aria(<name>), ::-p-text(<text>), or a CSS selector.' },
       value: { type: 'string', description: 'Text for "fill", key name for "press", option value for "select". Not used by "click".' },
+      index: { type: 'integer', description: '0-based position among visible matches of target (e.g. click the 3rd search result). Defaults to the first match.' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: pageStatusProperties },
@@ -251,9 +258,11 @@ export function applyBrowserActTool(
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       if (args.target.trim().length === 0) throw new Error('target must be a non-empty string')
+      if (args.index !== undefined && (!Number.isInteger(args.index) || args.index < 0)) throw new Error('index must be a non-negative integer')
       if (requestApproval !== undefined) {
         const valuePart = args.value === undefined ? '' : ` value "${args.value}"`
-        const outcome = await requestApproval(exec, `browser_act: ${args.action} "${args.target}"${valuePart}`)
+        const indexPart = args.index === undefined ? '' : ` #${args.index}`
+        const outcome = await requestApproval(exec, `browser_act: ${args.action} "${args.target}"${indexPart}${valuePart}`)
         if (outcome !== 'allowed-once') {
           throw new Error(`browser_act was not approved (outcome: ${outcome}); the page was not modified`)
         }
@@ -262,6 +271,7 @@ export function applyBrowserActTool(
         action: args.action,
         target: args.target,
         ...(args.value === undefined ? {} : { value: args.value }),
+        ...(args.index === undefined ? {} : { index: args.index }),
       }
       const result = await ctx.browser.act(derivePageKey(exec), request, exec.signal)
       return statusValue(result)
@@ -311,6 +321,145 @@ export function applyBrowserExtractTool(ctx: Context, options: BrowserToolOption
       }, exec.signal)
     },
     presentCall: args => statusCall(`Extract ${args.selector ?? 'page text'}`, 'read', args.selector),
+  }))
+}
+
+/**
+ * Register `browser_extract_list`: one structured read of a repeated list
+ * (search results, table rows, link lists), replacing one `browser_extract`
+ * per field. The `fields` map is open JSON validated at this boundary.
+ * @param ctx - context whose tools registry receives the tool.
+ * @param options - resolved Consumer budgets.
+ */
+export function applyBrowserExtractListTool(ctx: Context, options: BrowserToolOptions): void {
+  ctx.tools.register(defineTool({
+    name: 'browser_extract_list',
+    description: 'Read a repeated list from the managed page: every row matching a CSS selector, projected onto named fields (a descendant selector reading text or one attribute). Returns structured rows in one call — use it for search results, tables, and link lists instead of one browser_extract per field.',
+    parameters: {
+      selector: { type: 'string', required: true, description: 'CSS selector for one row. Supports :has() and comma-separated alternatives.' },
+      fields: {
+        type: 'object',
+        required: true,
+        additionalProperties: true,
+        description: 'Field name → { selector?, attribute? }. Reads the text of the match (or of the row itself without a selector); "attribute" reads that attribute instead.',
+      },
+      limit: { type: 'integer', description: 'Maximum rows. Defaults to (and is capped by) the deployment limit.' },
+      maxFieldChars: { type: 'integer', description: 'Per-field character cap. Defaults to (and is capped by) the deployment limit.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          url: { type: 'string', required: true },
+          count: { type: 'integer', required: true },
+          truncated: { type: 'boolean', required: true },
+          rows: {
+            type: 'array',
+            required: true,
+            items: { type: 'object', additionalProperties: true },
+          },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: renderExtractList(value) }],
+    },
+    timeoutMs: options.readTimeoutMs,
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      if (args.selector.trim().length === 0) throw new Error('selector must be a non-empty string')
+      const limit = args.limit ?? options.extractListDefaultLimit
+      if (!Number.isInteger(limit) || limit < 1) throw new Error('limit must be a positive integer')
+      const maxFieldChars = args.maxFieldChars ?? options.extractListFieldChars
+      if (!Number.isInteger(maxFieldChars) || maxFieldChars < 1) throw new Error('maxFieldChars must be a positive integer')
+      const request: BrowserExtractListRequest = {
+        selector: args.selector,
+        fields: parseExtractListFields(args.fields),
+        limit: Math.min(limit, options.extractListMaxLimit),
+        maxFieldChars: Math.min(maxFieldChars, options.extractListMaxFieldChars),
+      }
+      const result = await ctx.browser.extractList(derivePageKey(exec), request, exec.signal)
+      // The seam's rows are readonly; the tool output value is a plain JSON tree.
+      return { ...result, rows: result.rows.map(row => ({ ...row })) }
+    },
+    presentCall: args => statusCall(`Extract list ${args.selector}`, 'read', args.selector),
+  }))
+}
+
+/** A structured read's canonical value. */
+interface ExtractListValue {
+  url: string
+  count: number
+  truncated: boolean
+  rows: Record<string, unknown>[]
+}
+
+/** Render one structured read: one line per row, `field=value` pairs. */
+function renderExtractList(value: ExtractListValue): string {
+  const lines = value.rows.map(row => Object.entries(row).map(([name, text]) => `${name}=${String(text)}`).join(' | '))
+  const footer = value.truncated ? '\n(truncated — raise limit or narrow the selector)' : ''
+  return `Rows from ${value.url} (${value.count})${footer}\n${lines.length > 0 ? lines.join('\n') : '(no rows matched)'}`
+}
+
+/**
+ * Validate the open `fields` parameter at the tool-JSON boundary into the typed
+ * projection the seam takes. Each field is an object with an optional
+ * `selector` (omit = the row itself) and an optional `attribute` (requires a
+ * selector).
+ * @param input - the model-supplied field map.
+ * @returns the validated field projection.
+ */
+function parseExtractListFields(input: Record<string, JsonValue>): Record<string, BrowserExtractListField> {
+  const fields: Record<string, BrowserExtractListField> = {}
+  for (const [name, spec] of Object.entries(input)) {
+    if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) {
+      throw new Error(`field "${name}" must be an object with optional selector/attribute`)
+    }
+    const record = spec as Record<string, JsonValue>
+    const selector = record.selector
+    const attribute = record.attribute
+    if (selector !== undefined && typeof selector !== 'string') throw new Error(`field "${name}" selector must be a string`)
+    if (attribute !== undefined && typeof attribute !== 'string') throw new Error(`field "${name}" attribute must be a string`)
+    if (attribute !== undefined && selector === undefined) throw new Error(`field "${name}": attribute requires a selector`)
+    fields[name] = {
+      ...(selector === undefined ? {} : { selector }),
+      ...(attribute === undefined ? {} : { attribute }),
+    }
+  }
+  if (Object.keys(fields).length === 0) throw new Error('fields must name at least one field')
+  return fields
+}
+
+/**
+ * Register `browser_wait`: wait for a selector or settle the current
+ * navigation, then report the page status. Use it after an action that
+ * triggers navigation before reading the new page.
+ * @param ctx - context whose tools registry receives the tool.
+ * @param options - resolved Consumer budgets.
+ */
+export function applyBrowserWaitTool(ctx: Context, options: BrowserToolOptions): void {
+  ctx.tools.register(defineTool({
+    name: 'browser_wait',
+    description: 'Wait for the managed page: until a selector matches a visible element, or (without a selector) until the current navigation/redirect settles. Returns the page status — read the new page after an action that navigates.',
+    parameters: {
+      selector: { type: 'string', description: 'CSS or ::-p-aria()/::-p-text() selector to wait for. Omit to settle the current navigation.' },
+      timeoutMs: { type: 'integer', description: 'Wait budget in milliseconds. Defaults to (and is capped by) the deployment limit.' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: pageStatusProperties },
+      render: (_args, value) => renderStatus('Waited', value),
+    },
+    timeoutMs: options.waitToolTimeoutMs,
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const requested = args.timeoutMs ?? options.waitTimeoutMs
+      if (!Number.isInteger(requested) || requested < 1) throw new Error('timeoutMs must be a positive integer')
+      const request: BrowserWaitRequest = {
+        timeoutMs: Math.min(requested, options.waitTimeoutMs),
+        ...(args.selector === undefined ? {} : { selector: args.selector }),
+      }
+      return statusValue(await ctx.browser.wait(derivePageKey(exec), request, exec.signal))
+    },
+    presentCall: args => statusCall(args.selector === undefined ? 'Wait for navigation' : `Wait for ${args.selector}`, 'read', args.selector),
   }))
 }
 
