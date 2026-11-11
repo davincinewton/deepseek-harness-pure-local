@@ -1,6 +1,6 @@
 ---
 name: headless-web-search
-description: "Use when search results from the managed headless browser must be handed off to a downstream deep-fetch workflow that runs in a SEPARATE session (or after the browser page is closed), or when the user asks for a browser search that does not touch their own Chrome. Runs a DuckDuckGo search (two pages) on the built-in managed headless browser (browser_* tools; no MCP bridge) — degrading to Bing, then Baidu, when an engine blocks the headless browser — resolves every row to a clean real URL (no click needed on the default engines), captures each chosen page's full text while it is on screen, and emits a web-search-chrome-url-compatible JSON manifest of {title, source, date, snippet, url, fullText, published, type} plus an unresolved list with notes."
+description: "Use when search results from the managed headless browser must be handed off to a downstream deep-fetch workflow that runs in a SEPARATE session (or after the browser page is closed), or when the user asks for a browser search that does not touch their own Chrome. Runs a DuckDuckGo search (two pages) on the built-in managed headless browser (browser_* tools; no MCP bridge) — degrading to Bing, then Brave, when an engine blocks the headless browser — resolves every row to a clean real URL (no click needed on DuckDuckGo or Brave), captures each chosen page's full text while it is on screen, and emits a web-search-chrome-url-compatible JSON manifest of {title, source, date, snippet, url, fullText, published, type} plus an unresolved list with notes."
 ---
 
 # Headless Web Search → Resolved URL Manifest
@@ -9,20 +9,20 @@ Search the web through the built-in managed headless browser (the `browser_*` to
 
 ## Why this skill exists
 
-DuckDuckGo (the default engine) embeds the real URL in every result link (`uddg=` parameter — decode it, no navigation needed) and Baidu's `link?url=` tokens resolve by a plain navigation, so clean URLs come **free from the search page itself**: the whole default path runs with read-only tools and no approval-gated calls. The manifest is therefore the only output; there is no separate link-list mode. Bing — the middle fallback — is the one engine whose `/ck/a` links resolve only by clicking its rows, so click resolution survives as a Bing-only step.
+DuckDuckGo (the default engine) embeds the real URL in every result link (`uddg=` parameter — decode it, no navigation needed) and Brave rows carry the article's direct URL in `href`, so clean URLs come **free from the search page itself**: the whole default path runs with read-only tools and no approval-gated calls. The manifest is therefore the only output; there is no separate link-list mode. Bing — the middle fallback — is the one engine whose `/ck/a` links resolve only by clicking its rows, so click resolution survives as a Bing-only step.
 
 ## Preconditions
 
 - The `browser_navigate`, `browser_act`, `browser_wait`, `browser_extract_list`, `browser_extract`, and `browser_close` tools must be in this session's catalog. If they are not, this skill cannot run: its output requires URL decoding/capture on live pages. Report the capability as unavailable and offer `web_search` as a degraded alternative (snippets only, no resolved URLs or full text). Do not loop.
 - The first browser call can take a while: it launches Chrome Headless Shell, and on a fresh install downloads it first. Wait it out once.
-- `browser_act` is needed only when the search ran on **Bing**. If a `browser_act` call is denied by the session's approval gate, stop click-resolving, emit the manifest with everything captured so far, and record the remaining Bing items under `unresolved` with the note `"approval denied"`. Never retry a denied call. DuckDuckGo and Baidu items are unaffected — they resolve by navigation.
+- `browser_act` is needed only when the search ran on **Bing**. If a `browser_act` call is denied by the session's approval gate, stop click-resolving, emit the manifest with everything captured so far, and record the remaining Bing items under `unresolved` with the note `"approval denied"`. Never retry a denied call. DuckDuckGo and Brave items are unaffected — their rows already carry the clean URL.
 - For a search in the user's own logged-in Chrome (personalized results), use `web-search-chrome` / `web-search-chrome-url` instead — they need the mcp-chrome bridge.
 
 ## Rules
 
 - **Read-only**: navigate and read only. No logins, purchases, or form submissions.
 - **One managed page for the whole run**: every call reuses it; `browser_close` when done.
-- **Never emit or pass a raw `href` token**: Bing `/ck/a` and Baidu `link?url=` tokens go into no output; only resolved final URLs (or DuckDuckGo's decoded `uddg` URL) do.
+- **Never emit or pass a raw `href` token**: Bing `/ck/a` tokens go into no output; only resolved final URLs (DuckDuckGo's decoded `uddg` URL, or a Brave row's direct `href`) do.
 - **Wall detection**: an HTTP 403, a navigation error, or rows whose fields are all empty means that engine refused this browser — degrade per Fallback engines. Never retry a blocked engine.
 - **Two pages on DuckDuckGo, one page on a fallback engine**; cap 8 rows per page and 200 characters per field (the extraction call enforces both).
 
@@ -39,22 +39,22 @@ DuckDuckGo (the default engine) embeds the real URL in every result link (`uddg=
 The first engine that answers is the search. Record which engine answered for the manifest's methodology.
 
 1. **Bing**: `https://www.bing.com/search?q=<url-encoded query>&setlang=en` — rows present but every field empty means a results-less shell was served: unavailable. Extract with selector `li.b_algo`, fields `title` → selector `h2`, `snippet` → selector `p`. Bing links are `/ck/a` tokens: no clean URL comes from the results page, so each item resolves only by the click step (Step 3.2).
-2. **Baidu**: `https://www.baidu.com/s?wd=<url-encoded query>&rn=10` — a redirect to a Baidu security-verification page, or 0 rows after one selector adaptation, means unavailable. Extract with selector `div.c-container`, fields `title` → selector `h3`, `url` → selector `h3 a` attribute `href`, `snippet` → selector `[class*=abstract]` (Baidu's snippet/source class names rotate; on 0 rows take one `browser_snapshot` and adapt once). Each `url` is an `http://www.baidu.com/link?url=…` redirect token: never emit it — Step 3.1 navigates to it and records the final URL. Expect a language mix: Baidu returns Chinese-language results even for English queries; keep them (they are real coverage) but say so downstream.
+2. **Brave**: `https://search.brave.com/search?q=<url-encoded query>` — navigate with `waitUntil: networkidle2`, because Brave renders its result column shortly after load (extracting at `load` can see 0 rows; `browser_wait` without a selector is the alternative). Extract with `browser_extract_list`: selector `div:has(> a[href^="https"]:not([href*="brave.com"]))`, fields `title` → selector `a[href^="https"]`, `url` → selector `a[href^="https"]` attribute `href`. Each `url` is the article's **direct URL — no token, no click**: Brave items are handled exactly like DuckDuckGo items from here. Still 0 rows after one `browser_snapshot` + selector adaptation means unavailable. Brave runs its **own independent index** (not a Google/Bing mirror), so its results are genuinely different coverage — say so downstream.
 
 If all three engines are unavailable, report that every engine blocked the headless browser, run `web_search` as the degraded alternative, and say so.
 
 ## Step 2 — Choose the resolution set
 
-Pick the items the downstream workflow needs (top N, per-segment picks; the task decides). DuckDuckGo items already hold their clean URL; Bing and Baidu items carry their token into Step 3.
+Pick the items the downstream workflow needs (top N, per-segment picks; the task decides). DuckDuckGo and Brave items already hold their clean URL; only Bing items carry a token into Step 3.
 
 ## Step 3 — Resolve and capture, one item at a time (ascending index)
 
-1. **DuckDuckGo items**: `browser_navigate` to the decoded URL. **Baidu items**: `browser_navigate` to the recorded `link?url=` token — the returned status is the landed page and its `url` is the clean real URL (the redirect was followed natively); a verification/error page instead means the token died — re-extract the results page for a fresh token once, else mark `unresolved`, note `"redirect blocked"`.
+1. **DuckDuckGo and Brave items**: `browser_navigate` to the recorded clean URL (DuckDuckGo's decoded `uddg`, or the Brave row's direct `href`) — the returned status is the landed page.
 2. **Bing items**: `browser_act` with `action: click`, `index` = the item's 0-based position **within the current page's rows** (re-extract first to confirm alignment), target `#b_results h2 a`. The returned status is the landed page: its `url` is the clean real URL. If the status `url` is still on the Bing domain (slow redirect), `browser_wait` (no selector) once and re-read; still a token → `unresolved`, note `"redirect not completed"`.
 3. For every landed page: verify the page `title` plausibly matches the result title; a mismatch means the wrong target landed — discard and say so.
 4. **Capture full text** with `browser_extract` (no selector, `maxChars: 20000`): the rendered page's text. If the body is dominated by cookie/subscribe/paywall boilerplate or the status said 401/403, the item is paywalled/blocked — mark `unresolved` with a note and move on.
 5. **Probe the article's own date** with `browser_extract_list`: selector `head, article, main, body`, fields `published` → selector `meta[property="article:published_time"]` attribute `content`, `date` → selector `meta[name="date"]` attribute `content`, `when` → selector `time[datetime]` attribute `datetime` (field selectors are resolved inside their row, so the `head` row supplies the `meta` values and the `article`/`main`/`body` rows supply visible `time` elements). First non-empty value wins → `published`; none → `published: null`.
-6. **Return to results**: `browser_navigate` back to the recorded search URL (the DuckDuckGo page-1/2 URL, the Bing search URL, or the Baidu URL), re-extract, and verify the list still matches (row count + first title **of the post-decode, post-ad-filter list** — ad slots shuffle between loads) before the next item. DuckDuckGo and Bing need no session tokens; Baidu mints fresh `link?url=` tokens per load, so always re-extract instead of reusing tokens.
+6. **Return to results**: `browser_navigate` back to the recorded search URL (the DuckDuckGo page-1/2 URL, the Bing search URL, or the Brave search URL), re-extract, and verify the list still matches (row count + first title **of the post-decode, post-ad-filter list** — ad slots shuffle between loads) before the next item. None of the three engines needs session tokens; Brave appends its own `conversation=` parameter to the address bar after load, so always re-navigate to the ORIGINAL search URL you recorded, not the current address.
 
 ## Step 4 — Emit the manifest
 
@@ -95,15 +95,15 @@ Output the resolved set as a **JSON array** — the handoff artifact a separate-
 |---|---|
 | No `browser_*` tools in catalog | Capability unavailable; offer `web_search` (snippets only) |
 | First browser call very slow | Chrome Headless Shell download/launch — wait it out once |
-| DuckDuckGo 403 or navigation error | Engine unavailable — Bing, then Baidu; never retry DuckDuckGo |
+| DuckDuckGo 403 or navigation error | Engine unavailable — Bing, then Brave; never retry DuckDuckGo |
 | Decoded `uddg` points at `duckduckgo.com/y.js` | Sponsored redirect — discard the row, do not resolve it |
-| Bing rows with empty fields | Results-less shell — engine unavailable, go to Baidu |
+| Bing rows with empty fields | Results-less shell — engine unavailable, go to Brave |
 | Bing status `url` still engine-token after click | `browser_wait` once; still a token → `unresolved`, note `"redirect not completed"` |
-| Baidu lands on security verification, or 0 rows | One `browser_snapshot` + selector adaptation; still failing → engine unavailable |
-| Baidu `link?url=` token dies on navigation | Re-extract for a fresh token once; else `unresolved`, note `"redirect blocked"` |
+| Brave shows 0 rows right after navigation | Results render after load — `browser_wait` (no selector) or navigate with `networkidle2`, re-extract; still 0 after one selector adaptation → engine unavailable |
+| Brave CAPTCHA/bot-challenge page (rare) | Engine unavailable — never retry a blocked engine |
 | Consent/interstitial instead of the article | `unresolved`, note `"interstitial"`; do not solve it |
 | Row list changed after return | Re-navigate to the search URL, re-extract, re-align indices, continue |
 | 0 rows on a results page (first engine) | One `browser_snapshot`, adapt selectors once, else degrade engine |
-| `browser_act` denied by approval gate (Bing only) | Stop click-resolving; emit what is captured; remaining Bing items `unresolved`, note `"approval denied"`; DuckDuckGo/Baidu items unaffected |
+| `browser_act` denied by approval gate (Bing only) | Stop click-resolving; emit what is captured; remaining Bing items `unresolved`, note `"approval denied"`; DuckDuckGo/Brave items unaffected |
 | All three engines unavailable | Stop; `web_search` as degraded alternative; say so |
 | Extraction reports `truncated` | Raise `limit`/`maxFieldChars` once if more is genuinely needed |

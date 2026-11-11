@@ -10,8 +10,8 @@ Build a professional research report on a topic using the built-in managed headl
 ## Preconditions
 
 - The `browser_*` tools must be available (same list as `headless-web-search`). If they are not, do not start the pipeline: the deep article fetch that makes this a real report requires the browser, and a snippet-only report is a failed report by this skill's own standard. Report that the research report cannot be produced.
-- The search stage delegates to the `headless-web-search` skill (DuckDuckGo two pages per query with Bing/Baidu fallbacks, wall detection). Load it before searching. Its manifest already carries each item's clean `url`, captured `fullText`, and `published` date — feed Stage 2 selection and Stage 3 fetch from the manifest instead of re-resolving or re-navigating what was already captured. Use `headless-multi-engine-search` instead when the user asks for cross-engine coverage or the topic is contested.
-- If a `browser_act` call is denied by the approval gate, the pipeline can still run: click-resolution is only needed for Bing rows — DuckDuckGo and Baidu items resolve by navigation, and manifest items are already in hand. Note the limitation in the methodology. Never retry a denied call.
+- The search stage delegates to the `headless-web-search` skill (DuckDuckGo two pages per query with Bing/Brave fallbacks, wall detection). Load it before searching. Its manifest already carries each item's clean `url`, captured `fullText`, and `published` date — feed Stage 2 selection and Stage 3 fetch from the manifest instead of re-resolving or re-navigating what was already captured. Use `headless-multi-engine-search` instead when the user asks for cross-engine coverage or the topic is contested.
+- If a `browser_act` call is denied by the approval gate, the pipeline can still run: click-resolution is only needed for Bing rows — DuckDuckGo and Brave items already carry the clean URL, and manifest items are already in hand. Note the limitation in the methodology. Never retry a denied call.
 
 ## Pipeline
 
@@ -43,7 +43,7 @@ Worked example — "crypto": segments = BTC, ETH, DeFi, stablecoins, altcoins, r
 
 Per selected article, all on the one managed page:
 
-1. Reach the article: use the search manifest's `fullText` when present; otherwise `browser_navigate` to the resolved URL (DuckDuckGo decoded `uddg` or Baidu `link?url=` token), or — for Bing rows only — `browser_act` click at the result's row `index` (per `headless-web-search` Step 3) then note the landed `url`.
+1. Reach the article: use the search manifest's `fullText` when present; otherwise `browser_navigate` to the resolved URL (DuckDuckGo decoded `uddg` or the Brave row's direct URL), or — for Bing rows only — `browser_act` click at the result's row `index` (per `headless-web-search` Step 3) then note the landed `url`.
 2. Extract the full text with `browser_extract` (no selector, `maxChars: 20000`): the rendered page's text.
 3. Pull out: key facts, figures, attributed quotes, dates.
 4. **Repair span gaps**: numbers and prices often live in styled spans that generic text extraction garbles (symptom: "traded nearon Sept. 4"). Re-read the suspect region with a targeted `browser_extract` `selector` (e.g. `article`, `article p`, the figure's container) before using it.
@@ -86,8 +86,8 @@ Output: `<topic-slug>-<YYYY-MM-DD>.md` in the workspace root. Then `browser_clos
 | Symptom | Action |
 |---|---|
 | No `browser_*` tools in catalog | Do not start; report the report cannot be produced |
-| DuckDuckGo 403 (`headless-web-search` Step 1) | Engine blocked — Bing/Baidu per its fallback chain; record it for the methodology; never retry a blocked engine |
-| Bing rows with empty fields / Baidu verification page | That engine unavailable; use whichever engine answers; if none, stop and report |
+| DuckDuckGo 403 (`headless-web-search` Step 1) | Engine blocked — Bing/Brave per its fallback chain; record it for the methodology; never retry a blocked engine |
+| Bing rows with empty fields / Brave bot-challenge page | That engine unavailable; use whichever engine answers; if none, stop and report |
 | Segment search returns only stale/irrelevant items | Mark the segment "no significant news this period"; do not pad with old items |
 | Paywall on a key article | Skip; try one secondary source for the same story; note the gap |
 | Figure conflict across sources | Report both with attribution; state which is more authoritative and why |
