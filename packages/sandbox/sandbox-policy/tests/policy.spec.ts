@@ -5,16 +5,17 @@
  */
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { isAbsolute, join, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { canonicalPath } from '@deepseek-ai/dsh-sandbox'
 import SandboxPolicyService, { SANDBOX_MODES, effectiveSandboxMode, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import SystemPrompt, { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
-async function mounted(config: { mode?: 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}) {
+async function mounted(config: { mode?: 'workspace-write' | 'danger-full-access'; workspaceRoot?: string; extraWritable?: string[] } = {}) {
   const ctx = new Context()
   await ctx.plugin(SandboxPolicyService, config)
   return ctx
@@ -52,11 +53,41 @@ describe('SandboxPolicyService', () => {
     expect(ctx.sandboxPolicy.workspaceRoot).toBe(resolve('/ws/../ws/./sub'))
   })
 
+  describe('the extraWritable allow-set (D1)', () => {
+    // Mirrors the service's resolveWorkspaceRoot: resolve(canonicalPath(..)).
+    const expectRoot = (svc: { extraWritable: readonly string[] }, rel: string) =>
+      expect(svc.extraWritable).toContain(resolve(canonicalPath(join(homedir(), rel))))
+
+    it('defaults to the task-infrastructure table (package caches, tool data dirs)', async () => {
+      const ctx = await mounted()
+      if (process.platform === 'win32') {
+        expect(ctx.sandboxPolicy.extraWritable).toContain(resolve(canonicalPath(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'))))
+      } else {
+        expectRoot(ctx.sandboxPolicy, '.cache')
+      }
+      expectRoot(ctx.sandboxPolicy, '.npm')
+      expect(ctx.sandboxPolicy.extraWritable.every(root => isAbsolute(root))).toBe(true)
+    })
+
+    it('config replaces the default table wholesale and expands ~', async () => {
+      const ctx = await mounted({ extraWritable: ['~/custom-cache'] })
+      expect(ctx.sandboxPolicy.extraWritable).toHaveLength(1)
+      expectRoot(ctx.sandboxPolicy, 'custom-cache')
+    })
+
+    it('an explicit empty list omits the field from resolved policies', async () => {
+      const ctx = await mounted({ extraWritable: [] })
+      expect(ctx.sandboxPolicy.extraWritable).toEqual([])
+      expect(ctx.sandboxPolicy.resolve()).not.toHaveProperty('extraWritable')
+    })
+  })
+
   it('resolves the deployment policy for an agentless call', async () => {
     const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
     expect(ctx.sandboxPolicy.resolve()).toEqual({
       mode: 'workspace-write',
       workspaceRoot: resolve('/fallback'),
+      extraWritable: ctx.sandboxPolicy.extraWritable,
     })
   })
 
@@ -69,11 +100,13 @@ describe('SandboxPolicyService', () => {
     expect(ctx.sandboxPolicy.resolve({ session: first })).toEqual({
       mode: 'workspace-write',
       workspaceRoot: resolve('/projects/first'),
+      extraWritable: ctx.sandboxPolicy.extraWritable,
       sessionId: 'sess-first',
     })
     expect(ctx.sandboxPolicy.resolve({ session: second })).toEqual({
       mode: 'danger-full-access',
       workspaceRoot: resolve('/projects/second'),
+      extraWritable: ctx.sandboxPolicy.extraWritable,
       sessionId: 'sess-second',
     })
     expect(ctx.sandboxPolicy.overrideOf(first)).toBeUndefined()
@@ -81,6 +114,7 @@ describe('SandboxPolicyService', () => {
     expect(ctx.sandboxPolicy.resolve()).toEqual({
       mode: 'workspace-write',
       workspaceRoot: resolve('/fallback'),
+      extraWritable: ctx.sandboxPolicy.extraWritable,
     })
   })
 
@@ -100,6 +134,7 @@ describe('SandboxPolicyService', () => {
       expect(ctx.sandboxPolicy.resolve({ session: session('sess-symlink-parent', cwd) })).toEqual({
         mode: 'workspace-write',
         workspaceRoot: realpathSync.native(physical),
+        extraWritable: ctx.sandboxPolicy.extraWritable,
         sessionId: 'sess-symlink-parent',
       })
     } finally {
@@ -114,6 +149,7 @@ describe('SandboxPolicyService', () => {
     expect(ctx.sandboxPolicy.resolve({ session: active, mode: 'danger-full-access' })).toEqual({
       mode: 'danger-full-access',
       workspaceRoot: resolve('/projects/approved'),
+      extraWritable: ctx.sandboxPolicy.extraWritable,
       sessionId: 'sess-approved',
     })
   })

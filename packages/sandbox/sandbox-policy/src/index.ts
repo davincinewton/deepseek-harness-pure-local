@@ -18,7 +18,8 @@
  * @module @deepseek-ai/dsh-sandbox-policy
  */
 
-import { resolve as resolvePath } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve as resolvePath } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent'
@@ -32,6 +33,31 @@ export { SANDBOX_MODES, effectiveSandboxMode, setSandboxMode } from './session-m
 /** Resolve filesystem identity before lexical normalization can erase symlink-sensitive components. */
 function resolveWorkspaceRoot(path: string): string {
   return resolvePath(canonicalPath(path))
+}
+
+/**
+ * The D1 task-infrastructure allow-set: directories ordinary tooling writes
+ * as a SIDE EFFECT of in-workspace work (package caches, installer stores,
+ * tool data dirs). Without them Mode A forces a use-once/full-access prompt
+ * (Phase 3) for `npm install`-class commands, so Mode A pre-allows them.
+ * Every entry is a documented hole in Mode A; credentials/config locations
+ * (`~/.ssh`, `~/.aws`, `~/.config`, ...) are deliberately NEVER included.
+ * The table is the default of the `extraWritable` config field — a deployment
+ * replaces it wholesale.
+ */
+function defaultExtraWritable(env: NodeJS.ProcessEnv, home: string): string[] {
+  if (process.platform === 'win32') {
+    const local = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+    return [local, join(home, '.cargo')]
+  }
+  const entries = [
+    env.XDG_CACHE_HOME ?? join(home, '.cache'),
+    env.XDG_DATA_HOME ?? join(home, '.local', 'share'),
+    join(home, '.npm'),
+    join(home, '.cargo'),
+  ]
+  if (process.platform === 'darwin') entries.push(join(home, 'Library', 'Caches'))
+  return entries
 }
 
 /** Render the policy without claiming which capabilities are mounted. */
@@ -70,6 +96,14 @@ export interface Config {
    * `process.cwd()`). Normal agent calls use their session cwd instead.
    */
   workspaceRoot?: string
+  /**
+   * Extra writable roots in `workspace-write` beyond the workspace and the
+   * platform temp areas (the D1 task-infrastructure allow-set: package
+   * caches and tool data directories). Set to replace the built-in default
+   * table wholesale; `~` expands to the home directory. Credentials and
+   * shell-config locations must never be listed.
+   */
+  extraWritable?: string[]
 }
 
 /** Inputs that select the sandbox policy for one capability call. */
@@ -93,12 +127,15 @@ export class SandboxPolicyService extends Service {
     // No schema default: process.cwd() is resolved in the constructor so the
     // stored root is always absolute regardless of how it was supplied.
     workspaceRoot: z.string(),
+    extraWritable: z.array(z.string()).default(undefined as unknown as string[]),
   })
 
   /** The deployment default mode — the fallback beneath a session override. */
   readonly defaultMode: SandboxMode
   /** The absolute `workspace-write` fallback root for calls without a session cwd. */
   readonly workspaceRoot: string
+  /** The resolved Mode A extra-writable allow-set (see {@link Config.extraWritable}). */
+  readonly extraWritable: readonly string[]
   constructor(ctx: Context, config: Config) {
     super(ctx, 'sandboxPolicy')
     // schemastery (static Config) already filled `mode`; the cast records that
@@ -106,6 +143,10 @@ export class SandboxPolicyService extends Service {
     // the process cwd is real branching, resolved absolute either way.
     this.defaultMode = config.mode as SandboxMode
     this.workspaceRoot = resolveWorkspaceRoot(config.workspaceRoot ?? process.cwd())
+    const home = homedir()
+    const configured = config.extraWritable as string[] | undefined
+    this.extraWritable = (configured ?? defaultExtraWritable(process.env, home))
+      .map(root => resolveWorkspaceRoot(root.startsWith('~') ? join(home, root.slice(1)) : root))
 
     ctx.inject(['systemPrompt'], (scope: Context) => {
       scope.systemPrompt.context({
@@ -135,6 +176,7 @@ export class SandboxPolicyService extends Service {
     return {
       mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
       workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot),
+      ...(this.extraWritable.length > 0 ? { extraWritable: this.extraWritable } : {}),
       ...session === undefined ? {} : { sessionId: session.id },
     }
   }

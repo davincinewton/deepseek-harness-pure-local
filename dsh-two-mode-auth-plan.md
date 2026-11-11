@@ -111,6 +111,16 @@ the third GUI answer button uses the same mode-keyed confirmation.
 
 ## 4. Phases
 
+> Status (this checkout): **Phase 1 landed** (`8007f74761` — rule-lane revert,
+> catalogs regenerated, plan doc kept). **Phase 2a/2b landed** (`8aec9b05fd` —
+> two-mode vocabulary, bwrap deleted, PROBE_SOLO Landlock probe, D2
+> user-facing fail-closed message, windows-acl single-mode runner, presets/
+> client/SDK-facing fixtures retargeted, keyless snapshots refreshed).
+> **Phase 2c (D1 allow-set) in progress.** Phases 3–5 open.
+> Known pre-existing failures (not from this work): zh_CN bash-denial
+> signature test, shiki lazy-load GUI flake, three browser-provisioning
+> snapshot failures from the worktree's in-progress browser packages.
+
 **Phase 1 — delete the rule-engine lane (revert to the pre-`14bc4330d0` shape).**
 
 - `packages/sandbox/sandbox/`: delete `src/rules.ts`, `src/read-only.ts`, their tests, and the

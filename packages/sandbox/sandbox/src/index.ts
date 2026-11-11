@@ -45,6 +45,16 @@ export interface SandboxExecutionPolicy {
   /** Absolute root directory `workspace-write` may write under. */
   workspaceRoot: string
   /**
+   * Extra writable roots beyond the workspace (the D1 task-infrastructure
+   * allow-set: package caches and tool data directories programs touch as
+   * side effects, so ordinary tooling runs unconfined-prompt-free in Mode A).
+   * Each entry is a documented hole in Mode A, resolved by the policy home
+   * (`extraWritable` config); enforcement layers add these to their
+   * workspace-write grants. Absent or empty means the workspace + platform
+   * temp areas only.
+   */
+  extraWritable?: readonly string[]
+  /**
    * Opaque identity of the calling session (the branded `dsh-session`
    * SessionId). Backends key per-session state off it (e.g. windows-acl gives
    * each live session/workspace pair a random private temp directory and SID,

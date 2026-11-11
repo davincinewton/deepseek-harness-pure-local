@@ -1598,12 +1598,20 @@ export interface Config {
    * `process.cwd()`). Normal agent calls use their session cwd instead.
    */
   workspaceRoot?: string
+  /**
+   * Extra writable roots in `workspace-write` beyond the workspace and the
+   * platform temp areas (the D1 task-infrastructure allow-set: package
+   * caches and tool data directories). Set to replace the built-in default
+   * table wholesale; `~` expands to the home directory. Credentials and
+   * shell-config locations must never be listed.
+   */
+  extraWritable?: string[]
 }
 ```
 
 Depends on: [`SandboxMode`](subsystems/sandbox.md)
 
-Source: [`packages/sandbox/sandbox-policy/src/index.ts:65`](../packages/sandbox/sandbox-policy/src/index.ts)
+Source: [`packages/sandbox/sandbox-policy/src/index.ts:91`](../packages/sandbox/sandbox-policy/src/index.ts)
 
 <a id="deepseek-aidsh-sdk-jsonrpc-server"></a>
 

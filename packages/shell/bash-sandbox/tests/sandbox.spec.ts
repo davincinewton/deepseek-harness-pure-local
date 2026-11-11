@@ -66,6 +66,9 @@ async function setup(
   await ctx.plugin(SandboxPolicyService, {
     ...mode !== undefined ? { mode } : {},
     ...workspaceRoot !== undefined ? { workspaceRoot } : {},
+    // Deterministic per-call policies in this file's equality assertions:
+    // the D1 allow-set's real stamping is covered by the policy home's tests.
+    extraWritable: [],
   })
   await ctx.plugin(LocalSubprocessRuntime)
   ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }

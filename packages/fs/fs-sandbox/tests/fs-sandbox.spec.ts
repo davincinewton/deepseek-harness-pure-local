@@ -79,6 +79,16 @@ describe('workspace-write containment', () => {
     expect(await readFile(path, 'utf8')).toBe('temp')
   })
 
+  it('an extraWritable root in the per-call policy is writable (the D1 allow-set)', async () => {
+    const extra = join(base, 'extra-root')
+    await mkdir(extra)
+    await fs.writeText(await target(join(extra, 'ok.txt')), 'extra', undefined, undefined, { mode: 'workspace-write', workspaceRoot: workspace, extraWritable: [extra] })
+    expect(await readFile(join(extra, 'ok.txt'), 'utf8')).toBe('extra')
+    // Without the stamp the same path stays denied.
+    await expect(fs.writeText(await target(join(extra, 'plain.txt')), 'x'))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+  })
+
   it('an absolute path outside the workspace is denied, no file created', async () => {
     const path = join(outside, 'escape.txt')
     await expect(fs.writeText(await target(path), 'x')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })

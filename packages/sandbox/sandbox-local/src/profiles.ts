@@ -18,11 +18,13 @@ import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
  */
 export function runnerCommandProfileArgs(policy: SandboxPolicy): string[] {
   // confine() receives a confined policy, whose only mode is workspace-write.
-  return [
+  const args = [
     '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent',
     '--tmpfs', '/tmp',
     '--bind', policy.workspaceRoot, policy.workspaceRoot,
   ]
+  for (const root of policy.extraWritable ?? []) args.push('--bind', root, root)
+  return args
 }
 
 /**
@@ -34,7 +36,7 @@ export function runnerCommandProfileArgs(policy: SandboxPolicy): string[] {
  * @returns launcher grant arguments before the trailing separator and command argv.
  */
 export function landlockProfileArgs(policy: SandboxPolicy): string[] {
-  const readWrite = ['/dev/null', '/tmp', policy.workspaceRoot]
+  const readWrite = ['/dev/null', '/tmp', policy.workspaceRoot, ...(policy.extraWritable ?? [])]
   return landlockGrantArgs({ readOnly: ['/'], readWrite })
 }
 

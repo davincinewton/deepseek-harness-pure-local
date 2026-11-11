@@ -355,13 +355,16 @@ export class LocalSandboxProvider extends SandboxProvider {
   private windowsAclRunnerArgv(policy: SandboxPolicy): string[] {
     const sessionId = policy.sessionId
     if (sessionId === undefined) {
+      // Agentless: the runner owns the DACLs, so hand it the extra roots.
+      const extra = (policy.extraWritable ?? []).flatMap(root => ['--extra-write', root])
       return [
         ...this.windowsAclRunnerInvocation(),
         '--workspace', policy.workspaceRoot,
         '--temp', tmpdir(),
+        ...extra,
       ]
     }
-    const temp = this.materializeAclGrant(sessionId, policy.workspaceRoot)
+    const temp = this.materializeAclGrant(sessionId, policy.workspaceRoot, policy.extraWritable)
     return [
       ...this.windowsAclRunnerInvocation(),
       '--workspace', policy.workspaceRoot,
@@ -384,13 +387,18 @@ export class LocalSandboxProvider extends SandboxProvider {
    * @param workspaceRoot - the resolved policy root.
    * @returns the pair's private temp directory and write capability.
    */
-  private materializeAclGrant(sessionId: SessionId, workspaceRoot: string): AclTempCapability {
+  private materializeAclGrant(sessionId: SessionId, workspaceRoot: string, extraWritable?: readonly string[]): AclTempCapability {
     assertTempRootOutsideWorkspace(workspaceRoot, tmpdir())
     const writeSid = workspaceWriteSid(workspaceRoot)
-    if (!this.workspaceGrants.has(workspaceRoot)) {
+    // The workspace and every D1 allow-set root carry the SAME workspace
+    // capability as a standing ACE (the reuse cache); each is provisioned
+    // once per provider lifetime.
+    for (const root of [workspaceRoot, ...(extraWritable ?? [])]) {
+      if (this.workspaceGrants.has(root)) continue
       const grant = AclWriteGrant.create(writeSid)
       try {
-        grant.add(workspaceRoot, true)
+        grant.add(root, true)
+        this.workspaceGrants.set(root, grant)
       } catch (error) {
         // Free the SID; a standing ACE (if the apply succeeded before a
         // post-apply throw) is the intended end state, not an error
@@ -402,7 +410,6 @@ export class LocalSandboxProvider extends SandboxProvider {
         }
         throw error
       }
-      this.workspaceGrants.set(workspaceRoot, grant)
     }
     const key = JSON.stringify([String(sessionId), workspaceRoot])
     const existing = this.tempCapabilities.get(key)

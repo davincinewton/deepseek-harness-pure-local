@@ -262,6 +262,43 @@ describe('windows-acl write grants (LocalSandboxProvider)', () => {
     }
   })
 
+  it('D1 allow-set roots receive standing grants under the same workspace capability, provisioned once', async () => {
+    try {
+      const { sandbox, fiber } = await setup()
+      const ws = workspaceRoot()
+      const extraA = workspaceRoot()
+      scratch.push(ws, extraA)
+      const policy: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: ws, sessionId: SessionId('d1'), extraWritable: [extraA] }
+      sandbox.confine(['true'], policy)
+      expect(mockState.grants).toEqual([
+        expect.objectContaining({ writeSid: WORKSPACE_SID, added: [{ path: ws, standing: true }], disposed: false }),
+        expect.objectContaining({ writeSid: WORKSPACE_SID, added: [{ path: extraA, standing: true }], disposed: false }),
+        expect.objectContaining({ added: [{ path: expect.stringMatching(/dsh-/), standing: false }], disposed: false }),
+      ])
+      // Second call: every standing grant is cached per root; only the temp
+      // capability is per session/workspace and also cached.
+      sandbox.confine(['true'], policy)
+      expect(mockState.grants).toHaveLength(3)
+      await fiber.dispose()
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('agentless confined argv carries --extra-write flags for the allow-set', async () => {
+    try {
+      const { sandbox, fiber } = await setup()
+      const confined = sandbox.confine(['true'], { mode: 'workspace-write', workspaceRoot: '/ws', extraWritable: ['/cache-x', '/store-y'] })
+      const argv = confined.argv
+      expect(argv.slice(argv.indexOf('--extra-write'))).toEqual([
+        '--extra-write', '/cache-x', '--extra-write', '/store-y', '--', 'true',
+      ])
+      await fiber.dispose()
+    } finally {
+      cleanup()
+    }
+  })
+
   it('agentless calls pass a temp root and no capabilities; the runner owns the private child lifecycle', async () => {
     try {
       const { sandbox, fiber } = await setup()

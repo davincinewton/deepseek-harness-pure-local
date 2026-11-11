@@ -27,6 +27,15 @@ describe('writableRoots', () => {
     expect(writableRoots({ mode: 'danger-full-access', workspaceRoot: process.cwd() })).toEqual([])
   })
 
+  it('appends the extraWritable allow-set, canonicalized and deduplicated against the workspace', () => {
+    const ws = mkdtempSync(join(tmpdir(), 'dsh-ws-extra-'))
+    const extra = mkdtempSync(join(tmpdir(), 'dsh-extra-'))
+    const roots = writableRoots({ mode: 'workspace-write', workspaceRoot: ws, extraWritable: [extra, extra, ws] })
+    expect(roots).toContain(realpathSync.native(extra))
+    expect(roots.filter(root => root === realpathSync.native(extra))).toHaveLength(1)
+    expect(roots.filter(root => root === realpathSync.native(ws))).toHaveLength(1)
+  })
+
   it('workspace-write grants the workspace root plus the platform temp areas, canonical and deduplicated', () => {
     const ws = mkdtempSync(join(tmpdir(), 'dsh-ws-'))
     const roots = writableRoots({ mode: 'workspace-write', workspaceRoot: ws })

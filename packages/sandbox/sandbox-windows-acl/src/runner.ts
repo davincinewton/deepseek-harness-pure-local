@@ -9,6 +9,7 @@
  * Stable argv contract (the seam builds it; a native-exe replacement would
  * keep the same contract):
  *   [node, runner.js, '--workspace', <dir>, '--temp', <dir>,
+ *    ['--extra-write', <dir>]...,
  *    ['--write-sid', <S-1-4-…>,
  *     '--temp-write-sid', <S-1-4-…>], '--', <argv...>]
  *
@@ -59,6 +60,8 @@ function fail(detail: string): never {
 interface ParsedArgs {
   workspace: string
   temp: string
+  /** Extra writable roots (`--extra-write`, repeatable) granted to the workspace capability. */
+  extraWrite: string[]
   writeSid: string | undefined
   tempWriteSid: string | undefined
   command: string
@@ -68,6 +71,7 @@ interface ParsedArgs {
 function parseArgs(raw: string[]): ParsedArgs {
   let workspace: string | undefined
   let temp: string | undefined
+  const extraWrite: string[] = []
   let writeSid: string | undefined
   let parsedTempWriteSid: string | undefined
   let index = 0
@@ -83,6 +87,7 @@ function parseArgs(raw: string[]): ParsedArgs {
     switch (token) {
       case '--workspace': workspace = value; break
       case '--temp': temp = value; break
+      case '--extra-write': extraWrite.push(value); break
       case '--write-sid': writeSid = value; break
       case '--temp-write-sid': parsedTempWriteSid = value; break
       default: fail(`unknown argument: ${token}`)
@@ -93,7 +98,7 @@ function parseArgs(raw: string[]): ParsedArgs {
   const argv = raw.slice(index)
   const command = argv[0]
   if (command === undefined) fail('missing command after --')
-  return { workspace, temp, writeSid, tempWriteSid: parsedTempWriteSid, command, args: argv.slice(1) }
+  return { workspace, temp, extraWrite, writeSid, tempWriteSid: parsedTempWriteSid, command, args: argv.slice(1) }
 }
 
 function requireDirectory(label: string, path: string): void {
@@ -108,6 +113,7 @@ async function main(): Promise<number> {
   // bogus root must fail loudly at the runner boundary, never mid-child.
   requireDirectory('--workspace', parsed.workspace)
   requireDirectory('--temp', parsed.temp)
+  for (const root of parsed.extraWrite) requireDirectory('--extra-write', root)
 
   const seamManaged = parsed.writeSid !== undefined || parsed.tempWriteSid !== undefined
   if ((parsed.writeSid === undefined) !== (parsed.tempWriteSid === undefined)) {
@@ -141,7 +147,7 @@ async function main(): Promise<number> {
       privateTempSid = tempWriteSid(privateTempDir)
     }
     sandbox = new AclSandbox({
-      writableDirs: [parsed.workspace],
+      writableDirs: [parsed.workspace, ...parsed.extraWrite],
       tempDir: privateTempDir,
       writeSid,
       tempWriteSid: privateTempSid,

@@ -75,6 +75,16 @@ describe('profile dialects', () => {
     expect(landlockProfileArgs(WW)).toEqual(['--ro', '/', '--rw', '/dev/null', '--rw', '/tmp', '--rw', '/ws'])
   })
 
+  it('landlock: the extraWritable allow-set joins the read-write grants', () => {
+    expect(landlockProfileArgs({ mode: 'workspace-write', workspaceRoot: '/ws', extraWritable: ['/cache', '/store'] }))
+      .toEqual(['--ro', '/', '--rw', '/dev/null', '--rw', '/tmp', '--rw', '/ws', '--rw', '/cache', '--rw', '/store'])
+  })
+
+  it('runnerCommand dialect: extra allow-set roots are bound read-write', () => {
+    const args = runnerCommandProfileArgs({ mode: 'workspace-write', workspaceRoot: '/ws', extraWritable: ['/cache'] })
+    expect(args.slice(-3)).toEqual(['--bind', '/cache', '/cache'])
+  })
+
   it('seatbelt: allow-default with every file write denied except /dev/null and the canonicalized writable roots', () => {
     // `/ws` does not exist, so it is granted as spelled (the canonicalization
     // fallback); `/tmp` and `os.tmpdir()` exist everywhere and are granted
