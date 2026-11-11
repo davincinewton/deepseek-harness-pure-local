@@ -117,7 +117,7 @@ the third GUI answer button uses the same mode-keyed confirmation.
 > allow-set (`60c19c516d`); the Landlock launcher builds and passes real
 > confinement e2e on a Linux dev host (musl-gcc unavailable — host-cc dev
 > build; CI owns the release matrix). Phase 3 three-answer prompt
-> (`c30e64fdbf`): pre-emptive fs gate (write/edit/read), `allowed-full-access`
+> (`c30e64fdb4`): pre-emptive fs gate (write/edit/read), `allowed-full-access`
 > through approval → apiproxy → GUI, confirmations keyed on sandbox mode.
 > Phase 4 delegation clamp + child-ask root routing (`5802be0186`).
 > Phase 5: TS SDK fixtures refreshed green (`examples/jsonrpc-agent`);
