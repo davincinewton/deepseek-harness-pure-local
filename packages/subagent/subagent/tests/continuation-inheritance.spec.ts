@@ -1,9 +1,11 @@
 /**
  * Continuable-child delegation policy: a fresh continuable start seeds the
- * parent's explicit sandbox override and the pinned `approval/policy: never`
- * onto the child's own log as `source: 'delegation'` events, and a cold
- * resume replays that persisted snapshot instead of re-capturing the parent
- * (the one-shot `subagent-inprocess/tests/inheritance.spec.ts` counterpart).
+ * parent's explicit sandbox override (CLAMPED — a full-access parent
+ * delegates workspace-write, full access never travels through delegation)
+ * and the parent's explicit approval override onto the child's own log as
+ * `source: 'delegation'` events, and a cold resume replays that persisted
+ * snapshot instead of re-capturing the parent (the one-shot
+ * `subagent-inprocess/tests/inheritance.spec.ts` counterpart).
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -21,7 +23,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import * as SubagentFork from '@deepseek-ai/dsh-subagent-fork-in-process'
 import * as SubagentSpawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
-import ApprovalService, { effectiveApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
+import ApprovalService, { effectiveApprovalPolicy, setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import SubagentRuntime from '../src/index.ts'
 
@@ -74,11 +76,10 @@ function policyEvents(events: readonly SessionEvent[]) {
 }
 
 describe('continuable policy inheritance', () => {
-  it('seeds the parent sandbox override and pins approval to never', { timeout: 20_000 }, async () => {
+  it('clamps a full-access parent to workspace-write and inherits the explicit approval override', { timeout: 20_000 }, async () => {
     const { ctx, parent } = await setup([textResponse('child done')])
     setSandboxMode(parent.session, 'danger-full-access')
-    // No parent approval override: the child pin must not depend on one.
-    expect(ctx.approval.overrideOf(parent.session)).toBeUndefined()
+    setApprovalPolicy(parent.session, 'ask')
     let child: Agent | undefined
     ctx.on('agent/created', ({ agent }) => {
       if (agent !== parent) child = agent
@@ -88,19 +89,22 @@ describe('continuable policy inheritance', () => {
     // The delegation events are appended in the creation window, so they are
     // already the child's effective policy at inbox acceptance.
     if (child === undefined) throw new Error('expected the continuable child to be created')
-    expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('danger-full-access')
-    expect(ctx.approval.overrideOf(child.session)).toBe('never')
+    // The clamp: the parent's full access is its own; the child starts confined.
+    expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('workspace-write')
+    expect(ctx.approval.overrideOf(child.session)).toBe('ask')
 
     await waitNoActivation(ctx, started.childId)
     const loaded = await ctx.sessionPersistence.load(started.childId)
     expect(policyEvents(loaded.events)).toMatchObject([
-      { type: 'sandbox/mode', data: { mode: 'danger-full-access', source: 'delegation' } },
-      { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
+      { type: 'sandbox/mode', data: { mode: 'workspace-write', source: 'delegation' } },
+      { type: 'approval/policy', data: { policy: 'ask', source: 'delegation' } },
     ])
     // Durable: a reload folds the same effective policy.
-    expect(effectiveSandboxMode(loaded.events)).toBe('danger-full-access')
-    expect(effectiveApprovalPolicy(loaded.events)).toBe('never')
-    expect(ctx.approval.overrideOf(parent.session)).toBeUndefined()
+    expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
+    expect(effectiveApprovalPolicy(loaded.events)).toBe('ask')
+    // The parent keeps its own wide decision.
+    expect(ctx.sandboxPolicy.overrideOf(parent.session)).toBe('danger-full-access')
+    expect(ctx.approval.overrideOf(parent.session)).toBe('ask')
     const runtimeContext = loaded.events.find(
       (event): event is SessionEvent<'user/message'> => event.type === 'user/message'
         && event.data.source.kind === 'plugin'
@@ -128,21 +132,21 @@ describe('continuable policy inheritance', () => {
     expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
   })
 
-  it('leaves an unswitched sandbox on the deployment default while still pinning approval', { timeout: 20_000 }, async () => {
+  it('seeds nothing for a fully unswitched parent — both knobs resolve the same defaults', { timeout: 20_000 }, async () => {
     const { ctx, parent } = await setup([textResponse('child done')])
 
     const started = await ctx.subagents.startContinuable(startSpec(parent))
     await waitNoActivation(ctx, started.childId)
 
     const loaded = await ctx.sessionPersistence.load(started.childId)
-    expect(policyEvents(loaded.events)).toMatchObject([
-      { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
-    ])
+    expect(policyEvents(loaded.events)).toEqual([])
     expect(effectiveSandboxMode(loaded.events)).toBeUndefined()
+    expect(effectiveApprovalPolicy(loaded.events)).toBeUndefined()
   })
 
-  it('pins approval after the fork prefix of an unswitched fork child', { timeout: 20_000 }, async () => {
+  it('seeds the approval override after the fork prefix of a fork child', { timeout: 20_000 }, async () => {
     const { ctx, parent } = await setup([textResponse('parent turn'), textResponse('forked child')])
+    setApprovalPolicy(parent.session, 'ask')
     parent.followup(createUserMessage({
       content: [{ type: 'text', text: 'parent work' }],
       source: { kind: 'user' },
@@ -154,8 +158,11 @@ describe('continuable policy inheritance', () => {
 
     const loaded = await ctx.sessionPersistence.load(started.childId)
     expect(loaded.meta.seedLength).toBeGreaterThan(0)
+    // The fork prefix carries the parent's own switch event; the delegation
+    // seed lands after it (fresh policy wins stale seed state).
     expect(policyEvents(loaded.events)).toMatchObject([
-      { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
+      { type: 'approval/policy', data: { policy: 'ask' } },
+      { type: 'approval/policy', data: { policy: 'ask', source: 'delegation' } },
     ])
     expect(effectiveSandboxMode(loaded.events)).toBeUndefined()
   })
@@ -170,19 +177,21 @@ describe('continuable policy inheritance', () => {
 
     const started = await ctx.subagents.startContinuable(startSpec(parent))
     if (child === undefined) throw new Error('expected the continuable child to be created')
-    expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('danger-full-access')
-    // Last event wins: the child's own runtime switch beats the seeded snapshot.
-    setSandboxMode(child.session, 'workspace-write')
     expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('workspace-write')
+    // Last event wins: the child's own runtime switch (a human decision for
+    // THIS session) beats the seeded snapshot.
+    setSandboxMode(child.session, 'danger-full-access')
+    expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('danger-full-access')
 
     await waitNoActivation(ctx, started.childId)
     const loaded = await ctx.sessionPersistence.load(started.childId)
-    expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
+    expect(effectiveSandboxMode(loaded.events)).toBe('danger-full-access')
   })
 
   it('cold-resumes on the persisted snapshot without re-capturing the parent', { timeout: 20_000 }, async () => {
     const { ctx, parent } = await setup([textResponse('first'), textResponse('after resume')])
     setSandboxMode(parent.session, 'workspace-write')
+    setApprovalPolicy(parent.session, 'never')
     const started = await ctx.subagents.startContinuable(startSpec(parent))
     await waitNoActivation(ctx, started.childId)
 
@@ -200,7 +209,7 @@ describe('continuable policy inheritance', () => {
       { data: { mode: 'workspace-write', source: 'delegation' } },
     ])
     expect(effectiveSandboxMode(loaded.events)).toBe('workspace-write')
-    // The approval pin is seeded once at creation, never re-appended on resume.
+    // The approval override is seeded once at creation, never re-appended on resume.
     expect(loaded.events.filter(event => event.type === 'approval/policy')).toMatchObject([
       { data: { policy: 'never', source: 'delegation' } },
     ])

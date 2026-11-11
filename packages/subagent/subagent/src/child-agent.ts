@@ -13,12 +13,15 @@ import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-a
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
-// Type-only: make `ctx.get('sandboxPolicy')` / `ctx.get('approval')` resolve
-// to the policy services when composed — delegation consumes both
+// The type import makes `ctx.get('sandboxPolicy')` / `ctx.get('approval')`
+// resolve to the policy services when composed — delegation consumes both
 // opportunistically (the documented `ctx.get` pattern), never as a hard dep —
-// and merge the `sandbox/mode` / `approval/policy` session-event payloads.
+// and merges the `sandbox/mode` / `approval/policy` session-event payloads.
+// user-approval additionally contributes the explicit-policy fold, read only
+// when the approval seam is composed.
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
-import type {} from '@deepseek-ai/dsh-user-approval'
+import { effectiveApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
+import type { ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 // Type-only: make `ctx.get('agentPresets')` resolve to the preset roster when
 // composed — a child inherits its parent's composition opportunistically (the
 // documented `ctx.get` pattern), never as a hard dep. A rosterless deployment
@@ -133,10 +136,10 @@ export interface ChildComposition {
  * deployment's system prompt stays uniform across parents and children.
  */
 export const SUBAGENT_DELEGATION_CONTEXT
-  = 'You are a delegated subagent: your permission scope was fixed when you were started and cannot be '
-    + 'widened from inside this session — operations that require approval are rejected automatically. '
-    + 'When the task needs access beyond that scope, do not retry the denied operation; state the '
-    + 'limitation in your reply so the delegating agent can handle it.'
+  = 'You are a delegated subagent: your sandbox mode was fixed when you were started and never inherits '
+    + 'the delegating session\'s full file access. Approval prompts from this session may be answered by '
+    + 'the user or rejected automatically. Never retry a refused operation: state the limitation in your '
+    + 'reply so the delegating agent can handle it.'
 
 /**
  * Compose one child inside its creation window: join its parent's preset,
@@ -176,30 +179,45 @@ export function applyChildComposition(
 
 /** Policy seeded onto a child session's log at the delegation boundary. */
 export interface DelegatedPolicyOverrides {
-  /** The parent session's explicit sandbox-mode override, or `undefined` without one. */
+  /**
+   * The mode to pin the child's log to: the parent session's explicit
+   * sandbox override, CLAMPED — a parent whose EFFECTIVE mode is
+   * full access delegates `'workspace-write'`, never the wide mode.
+   * Full access is a human decision for the session it was made in;
+   * subagents do not inherit it.
+   */
   readonly sandboxMode: SandboxMode | undefined
   /**
-   * `'never'` whenever the approval capability is composed, `undefined`
-   * otherwise: a delegated child acts only within the sandbox scope fixed at
-   * delegation, so its asks are rejected deterministically.
+   * The parent session's explicit approval-policy override, or `undefined`
+   * without one (the child then resolves the same composition default as
+   * the parent). A delegated child's prompt is a real prompt: it reaches
+   * the human through the same channel as any other ask.
    */
-  readonly approvalPolicy: 'never' | undefined
+  readonly approvalPolicy: ApprovalPolicy | undefined
 }
 
 /**
  * Capture the policy to seed into one delegation. Call synchronously before
  * the child start's first await: a later parent switch belongs to the
- * parent's future, not to this child. Only the parent session's explicit
- * sandbox override is captured — never deployment defaults or one-shot
- * grants — and the approval policy is pinned to `'never'` regardless of the
- * parent's own policy.
+ * parent's future, not to this child. Only explicit session overrides are
+ * captured — never deployment defaults or one-shot grants — with one clamp:
+ * when the parent session EFFECTIVELY runs full access (override or the
+ * deployment default), the child is seeded `'workspace-write'`, because
+ * widening to full access is a human decision scoped to one session and
+ * delegation cannot carry it. An explicit parent full-access override takes
+ * no effect on the child for the same reason.
  * @param parent - the delegating parent agent.
- * @returns the sandbox override (or `undefined` without one) and the approval pin.
+ * @returns the clamped sandbox mode and the inherited approval override.
  */
 export function captureDelegatedPolicyOverrides(parent: Agent): DelegatedPolicyOverrides {
+  const sandboxPolicy = parent.ctx.get('sandboxPolicy')
+  const explicit = sandboxPolicy?.overrideOf(parent.session)
+  const effective = sandboxPolicy?.resolve({ session: parent.session }).mode
   return {
-    sandboxMode: parent.ctx.get('sandboxPolicy')?.overrideOf(parent.session),
-    approvalPolicy: parent.ctx.get('approval') === undefined ? undefined : 'never',
+    sandboxMode: effective === 'danger-full-access' ? 'workspace-write' : explicit,
+    approvalPolicy: parent.ctx.get('approval') === undefined
+      ? undefined
+      : effectiveApprovalPolicy(parent.session.events),
   }
 }
 

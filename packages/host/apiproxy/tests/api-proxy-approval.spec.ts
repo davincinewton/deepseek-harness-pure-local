@@ -121,6 +121,30 @@ describe('approval pending registry', () => {
     abort.abort()
   })
 
+  it('routes a delegated child question to the root session frame', async () => {
+    const { ctx, api } = await harness()
+    const abort = new AbortController()
+    const mux = openMux(api, abort)
+    const parent = agentOf(ctx)
+    const childSession = ctx.sessions.create(undefined, { meta: { parentSession: parent.session.id } })
+    childSession.append('turn/start', { turn: 1 })
+    const child = { session: childSession } as unknown as Agent
+
+    const asked = ctx.approval.request({ agent: child, toolName: 'write', reason: 'outside the child workspace' })
+    const requested = requestedOf(await mux.waitFor('approval/requested'))
+    // The frame names the ROOT session — the composer the human is looking at.
+    expect(requested.sessionId).toBe(parent.session.id)
+
+    const envelope = mux.envelopes.find(e => e.payload.type === 'approval/requested') as RpcRequest<MuxFrame>
+    const receipt = await api.respond(answer(envelope.rpcId, requested.sessionId, requested.approvalId, 'allowed-once'))
+    expect(receipt).toEqual({ accepted: true })
+    await expect(asked).resolves.toBe('allowed-once')
+    // The audit pair belongs to the asking child's own log.
+    expect(childSession.events.some(event => event.type === 'approval/asked')).toBe(true)
+    expect(childSession.events.some(event => event.type === 'approval/decided')).toBe(true)
+    abort.abort()
+  })
+
   it('round-trips ask → requested frame → respond → outcome + resolved broadcast', async () => {
     const { ctx, api } = await harness()
     const abort = new AbortController()

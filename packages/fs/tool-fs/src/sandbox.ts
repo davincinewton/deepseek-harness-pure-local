@@ -114,10 +114,12 @@ export class FsSandboxController {
       setSandboxMode(session, 'danger-full-access')
       return 'allow-full-access'
     }
+    // A cancelled ask is a human withdrawal, like a rejection; only a
+    // missing/failed channel reads as "no prompt happened".
     throw new FsError(fsRefusal(verb, path,
-      outcome === 'rejected'
-        ? 'the prompt was refused (rejected by the user, or rejected automatically because approval is disabled in this session)'
-        : 'approval prompts are not available in this session'),
+      outcome === 'unavailable'
+        ? 'approval prompts are not available in this session'
+        : 'the prompt was refused (rejected or cancelled by the user, or rejected automatically because approval is disabled in this session)'),
     'FS_SANDBOX_DENIED')
   }
 

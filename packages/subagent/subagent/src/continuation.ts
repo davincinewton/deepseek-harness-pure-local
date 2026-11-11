@@ -252,7 +252,7 @@ interface MaterializeInputs {
   create?: {
     seed: readonly SessionEvent[]
     meta: NonNullable<CreateAgentOptions['meta']>
-    /** Policy captured at the delegation boundary: the parent's sandbox override plus the approval pin. */
+    /** Policy captured at the delegation boundary (clamped): the parent's sandbox override plus its approval override. */
     delegatedPolicies: DelegatedPolicyOverrides
   }
   agentOptions: AgentOptions

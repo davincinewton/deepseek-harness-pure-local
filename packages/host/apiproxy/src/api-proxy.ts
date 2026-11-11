@@ -1391,7 +1391,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     ctx.effect(() => () => {
       for (const pending of [...pendingApprovals.values()]) pending.resolve('cancelled')
     }, 'api-proxy: approval registry teardown')
-    ctx.on('approval/request', (req, next) => {
+    ctx.on('approval/request', async (req, next) => {
       // Dispatch rides a microtask behind the service's own signal check: an
       // abort landing in that window would register the abort listener AFTER
       // the signal fired — never invoked, entry pending forever, zombie frame
@@ -1428,6 +1428,22 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       // not this channel's question; delegate to the fail-closed default.
       if (approvalId === undefined) return next()
       const id = approvalId
+      // A delegated child's question surfaces in the ROOT session's composer,
+      // where the human watching the parent can answer for the child; the
+      // asked/decided audit pair stays in the asking session's own log.
+      // The walk is lineage-bounded: a revisited id (a malformed log cycle)
+      // stops it.
+      let surfacedSessionId = req.agent.session.id
+      const visited = new Set<SessionId>([surfacedSessionId])
+      let lineage = req.agent.session.header.parentSession
+      while (lineage !== undefined && !visited.has(lineage)) {
+        visited.add(lineage)
+        surfacedSessionId = lineage
+        lineage = (await readSessionState(lineage)).header.parentSession
+      }
+      // The await above re-opens the abort race the synchronous dispatch
+      // above guards: settle cancelled rather than register a dead entry.
+      if ((req.signal as AbortSignal | undefined)?.aborted === true) return 'cancelled'
       return new Promise<ApprovalOutcome>((resolve) => {
         const settle = (outcome: ApprovalOutcome): void => {
           /* v8 ignore next 3 -- defensive double-settle guard: respond() routes
@@ -1445,7 +1461,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const onAbort = (): void => { settle('cancelled') }
         const pending: PendingApproval = {
           rpcId: RpcId(randomUUID()),
-          sessionId: req.agent.session.id,
+          sessionId: surfacedSessionId,
           approvalId: id,
           toolName: req.toolName,
           ...req.callId === undefined ? {} : { callId: req.callId },
