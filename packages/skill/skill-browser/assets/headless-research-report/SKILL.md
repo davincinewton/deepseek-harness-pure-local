@@ -10,7 +10,7 @@ Build a professional research report on a topic using the built-in managed headl
 ## Preconditions
 
 - The `browser_*` tools must be available (same list as `headless-web-search`). If they are not, do not start the pipeline: the deep article fetch that makes this a real report requires the browser, and a snippet-only report is a failed report by this skill's own standard. Report that the research report cannot be produced.
-- The search stage delegates to the `headless-web-search` skill (DuckDuckGo two pages per query with Bing/Brave fallbacks, wall detection). Load it before searching. Its manifest already carries each item's clean `url`, captured `fullText`, and `published` date — feed Stage 2 selection and Stage 3 fetch from the manifest instead of re-resolving or re-navigating what was already captured. Use `headless-multi-engine-search` instead when the user asks for cross-engine coverage or the topic is contested.
+- The search stage delegates to the `headless-web-search` skill (DuckDuckGo two pages per query with Brave/Bing fallbacks, wall detection). Load it before searching. Its manifest already carries each item's clean `url`, captured `fullText`, and `published` date — feed Stage 2 selection and Stage 3 fetch from the manifest instead of re-resolving or re-navigating what was already captured. Use `headless-multi-engine-search` instead when the user asks for cross-engine coverage or the topic is contested.
 - If a `browser_act` call is denied by the approval gate, the pipeline can still run: click-resolution is only needed for Bing rows — DuckDuckGo and Brave items already carry the clean URL, and manifest items are already in hand. Note the limitation in the methodology. Never retry a denied call.
 
 ## Pipeline
@@ -18,6 +18,8 @@ Build a professional research report on a topic using the built-in managed headl
 ### Stage 0 — Scope
 
 Restate the assignment: question, time window, audience. Resolve relative windows to concrete dates using the current date from the session context (e.g. "this week" → Mon 2026-09-01 … Sat 2026-09-05). If the window or audience is genuinely ambiguous, ask once before searching.
+
+**Trend/forward-looking topics** (no news window stated, e.g. "the next generation of X"): the default is a **window + background corpus** — items from roughly the last three months are reported as in-window, older analysis is used only with an explicit *background* label and its own publication date, and the choice is recorded in the methodology. Do not force the whole corpus into a news window it cannot fill.
 
 ### Stage 1 — Topic analysis (coverage map)
 
@@ -35,7 +37,7 @@ Worked example — "crypto": segments = BTC, ETH, DeFi, stablecoins, altcoins, r
 
 ### Stage 2 — Search & select
 
-- Run **one query per major segment** (plus one query for the topic itself), each with two pages via `headless-web-search`. When an engine blocks mid-run, its degradation rules apply per query — record which engine answered each segment's search for the methodology.
+- Run **one query per major segment** (plus one query for the topic itself) via `headless-web-search`: the **topic query gets its two pages; segment queries run one page each** (DuckDuckGo's page 2 largely duplicates page 1, and two pages per segment would overrun the effort budget on its own). When an engine blocks mid-run, its degradation rules apply per query — record which engine answered each segment's search for the methodology.
 - From the merged pool, select **6–10 articles** to read in full, applying a **per-segment quota**: any segment with real news gets at least one article in the fetch budget.
 - Selection criteria, in order: date inside the window → source authority → primary over secondary → complementary angles → dedupe by story.
 
@@ -86,8 +88,10 @@ Output: `<topic-slug>-<YYYY-MM-DD>.md` in the workspace root. Then `browser_clos
 | Symptom | Action |
 |---|---|
 | No `browser_*` tools in catalog | Do not start; report the report cannot be produced |
-| DuckDuckGo 403 (`headless-web-search` Step 1) | Engine blocked — Bing/Brave per its fallback chain; record it for the methodology; never retry a blocked engine |
+| DuckDuckGo 403 (`headless-web-search` Step 1) | Engine blocked — Brave/Bing per its fallback chain; record it for the methodology; never retry a blocked engine |
 | Bing rows with empty fields / Brave bot-challenge page | That engine unavailable; use whichever engine answers; if none, stop and report |
+| Landed URL redirects to an unrelated domain with an unrelated title (full-page ad take-over) | The site is unreachable through this browser: skip, note `"ad hijack"`; the story's stat/claim may NOT be used from search-snippet memory — try one legitimate secondary source or record the gap |
+| Landed status is non-200 (e.g. 204) yet the body holds the article | Trust the body; record the landed status in the source note |
 | Segment search returns only stale/irrelevant items | Mark the segment "no significant news this period"; do not pad with old items |
 | Paywall on a key article | Skip; try one secondary source for the same story; note the gap |
 | Figure conflict across sources | Report both with attribution; state which is more authoritative and why |

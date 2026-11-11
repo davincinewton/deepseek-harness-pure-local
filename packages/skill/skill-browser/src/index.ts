@@ -66,7 +66,7 @@ const SHIPPED_SKILLS: readonly ShippedSkill[] = [
   },
   {
     name: 'headless-web-search',
-    description: 'Use when search results from the managed headless browser must be handed off to a downstream deep-fetch workflow that runs in a SEPARATE session (or after the browser page is closed), or when the user asks for a browser search that does not touch their own Chrome. Runs a DuckDuckGo search (two pages) on the built-in managed headless browser (browser_* tools; no MCP bridge) — degrading to Bing, then Brave, when an engine blocks the headless browser — resolves every row to a clean real URL (no click needed on DuckDuckGo or Brave), captures each chosen page\'s full text while it is on screen, and emits a web-search-chrome-url-compatible JSON manifest of {title, source, date, snippet, url, fullText, published, type} plus an unresolved list with notes.',
+    description: 'Use when search results from the managed headless browser must be handed off to a downstream deep-fetch workflow that runs in a SEPARATE session (or after the browser page is closed), or when the user asks for a browser search that does not touch their own Chrome. Runs a DuckDuckGo search (two pages) on the built-in managed headless browser (browser_* tools; no MCP bridge) — degrading to Brave, then Bing, when an engine blocks the headless browser — resolves every row to a clean real URL (no click needed on DuckDuckGo or Brave), captures each chosen page\'s full text while it is on screen, and emits a web-search-chrome-url-compatible JSON manifest of {title, source, date, snippet, url, fullText, published, type} plus an unresolved list with notes.',
   },
   {
     name: 'headless-multi-engine-search',

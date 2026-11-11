@@ -11,7 +11,7 @@ Run the **same query through 2 search engines** (DuckDuckGo, Brave) on the built
 
 Single-engine results are biased by that engine's index and ranking model. Cross-engine agreement is a cheap relevance signal: a result returned by both independent engines is more likely genuinely on-topic than one from a single engine. DuckDuckGo and Brave run **separate crawls and indexes**, so agreement here is cross-index, not a mirror echo.
 
-`headless-web-search` searches **DuckDuckGo first** (Bing/Brave are fallbacks there). This skill makes both of its two engines first-class, and each is **degradable**: an engine blocked for the headless browser is recorded as unavailable while the other still runs — from a given network DuckDuckGo or Brave may answer while the other blocks. Both engines carry the clean URL in every row (DuckDuckGo's decoded `uddg`, Brave's direct `href`), so the whole run is **read-only**: no clicks, no redirect tokens, no approval-gated calls. The user's real Chrome is not involved: results are anonymous and not personalized; state that in any downstream methodology.
+`headless-web-search` searches **DuckDuckGo first** (Brave/Bing are fallbacks there). This skill makes both of its two engines first-class, and each is **degradable**: an engine blocked for the headless browser is recorded as unavailable while the other still runs — from a given network DuckDuckGo or Brave may answer while the other blocks. Both engines carry the clean URL in every row (DuckDuckGo's decoded `uddg`, Brave's direct `href`), so the whole run is **read-only**: no clicks, no redirect tokens, no approval-gated calls. The user's real Chrome is not involved: results are anonymous and not personalized; state that in any downstream methodology.
 
 ## Preconditions
 
@@ -29,10 +29,10 @@ Single-engine results are biased by that engine's index and ranking model. Cross
 
 ## Step 1 — Search both engines (1 page each)
 
-On the one managed page, in this order. Each navigation returns `{url, title, statusCode}` — apply the wall rules before extracting. All extractions use `limit: 8`, `maxFieldChars: 200`.
+On the one managed page, in this order. Each navigation returns `{url, title, statusCode}` — apply the wall rules before extracting. DuckDuckGo extractions use `limit: 8`, Brave uses `limit: 12` (its row selector yields duplicate rows for one URL — effective unique yield ≈ 5–6, folded by the Step 2 URL dedup); both use `maxFieldChars: 200`.
 
 1. **DuckDuckGo**: `https://html.duckduckgo.com/html/?q=<url-encoded query>` — extract with `browser_extract_list`: selector `#links .result`, fields `title` → selector `.result__a`, `url` → selector `.result__a` attribute `href`, `snippet` → selector `.result__snippet`. URL-decode the `uddg` parameter in each `url` to get the clean real URL, and **discard rows whose decoded URL points at `duckduckgo.com/y.js`** (sponsored redirects).
-2. **Brave**: `https://search.brave.com/search?q=<url-encoded query>` — navigate with `waitUntil: networkidle2` (Brave renders its result column shortly after load; extracting at `load` can see 0 rows; `browser_wait` without a selector is the alternative). Extract with `browser_extract_list`: selector `div:has(> a[href^="https"]:not([href*="brave.com"]))`, fields `title` → selector `a[href^="https"]`, `url` → selector `a[href^="https"]` attribute `href`. Each `url` is the article's **direct URL — no token, no click**. A bot-challenge page, or still-0 rows after one `browser_snapshot` adaptation → unavailable. The selector can yield duplicate rows for one URL — the Step 2 URL dedup folds them into one item.
+2. **Brave**: `https://search.brave.com/search?q=<url-encoded query>` — navigate with `waitUntil: networkidle2` (Brave renders its result column shortly after load; extracting at `load` can see 0 rows; `browser_wait` without a selector is the alternative). Extract with `browser_extract_list`: selector `div:has(> a[href^="https"]:not([href*="brave.com"]))`, fields `title` → selector `a[href^="https"]`, `url` → selector `a[href^="https"]` attribute `href`, `text` → (no field selector: reads the whole row). Each `url` is the article's **direct URL — no token, no click**. The row's `text` carries the source domain, a relative date (e.g. "1 month ago") and a short snippet — derive `snippet` and a relative `date` from it where legible; engine-relative dates are display hints only, and the Step 3 landed-page date probe stays the authority. A bot-challenge page, or still-0 rows after one `browser_snapshot` adaptation → unavailable.
 
 Per-engine record: `{ engine, count, items: [{ title, source?, date?, snippet, url, pos }] }` — `pos` is the 0-based position within that engine's rows (merge order), `url` the clean real URL.
 
@@ -98,4 +98,6 @@ A **JSON object** — the handoff artifact (superset of `headless-web-search`'s 
 | Both engines unavailable | Stop; `web_search` as degraded alternative; say so |
 | Duplicate rows for one Brave URL | Expected — Step 2 URL dedup folds them |
 | Row list changed after return | Re-navigate to that engine's search URL, re-align, continue |
+| Landed URL redirected to an unrelated domain with an unrelated title (full-page ad take-over) | `unresolved`, note `"ad hijack"`; no fact from that page may be used |
+| Landed status is non-200 (e.g. 204) yet body extraction returns the article text | Trust the body; record the landed status in the manifest note |
 | 0 rows on an engine's results page | One `browser_snapshot`, adapt selectors once; still 0 → engine unavailable |
