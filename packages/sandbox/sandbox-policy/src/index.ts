@@ -18,6 +18,7 @@
  * @module @deepseek-ai/dsh-sandbox-policy
  */
 
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -42,6 +43,9 @@ function resolveWorkspaceRoot(path: string): string {
  * (Phase 3) for `npm install`-class commands, so Mode A pre-allows them.
  * Every entry is a documented hole in Mode A; credentials/config locations
  * (`~/.ssh`, `~/.aws`, `~/.config`, ...) are deliberately NEVER included.
+ * Entries are opportunistic and resolved present-only at every
+ * {@link SandboxPolicyService.resolve} (see there): a tool cache absent on
+ * this host is ungrantable and unusable alike.
  * The table is the default of the `extraWritable` config field — a deployment
  * replaces it wholesale.
  */
@@ -100,8 +104,9 @@ export interface Config {
    * Extra writable roots in `workspace-write` beyond the workspace and the
    * platform temp areas (the D1 task-infrastructure allow-set: package
    * caches and tool data directories). Set to replace the built-in default
-   * table wholesale; `~` expands to the home directory. Credentials and
-   * shell-config locations must never be listed.
+   * table wholesale; `~` expands to the home directory. A root is granted
+   * only while it exists (see {@link SandboxPolicyService.resolve}).
+   * Credentials and shell-config locations must never be listed.
    */
   extraWritable?: string[]
 }
@@ -134,7 +139,10 @@ export class SandboxPolicyService extends Service {
   readonly defaultMode: SandboxMode
   /** The absolute `workspace-write` fallback root for calls without a session cwd. */
   readonly workspaceRoot: string
-  /** The resolved Mode A extra-writable allow-set (see {@link Config.extraWritable}). */
+  /**
+   * The configured Mode A extra-writable allow-set. Resolved policies carry
+   * only the roots present at resolution time (see {@link resolve}).
+   */
   readonly extraWritable: readonly string[]
   constructor(ctx: Context, config: Config) {
     super(ctx, 'sandboxPolicy')
@@ -167,16 +175,24 @@ export class SandboxPolicyService extends Service {
    * mode outranks the session's last `sandbox/mode` event, which outranks the
    * deployment default. A session cwd is its workspace-write boundary; the
    * configured root is the fallback for agentless calls and sessions without a
-   * cwd.
+   * cwd. The extra-writable allow-set is filtered to the roots that exist at
+   * this instant: every enforcement backend takes its grants as paths it must
+   * open or bind at spawn and fails closed on an unopenable one (the Landlock
+   * launcher exits 125 without exec'ing the command), and a confined command
+   * can never create an absent allow-set root itself because its parent lies
+   * outside the write set. A root that appears later joins the next
+   * resolution; one that vanishes in between still fails closed at the
+   * launcher, which is the correct verdict for a raced-away grant.
    * @param request - optional session and approved mode override.
    * @returns the fully resolved per-call mode and absolute workspace root.
    */
   resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy {
     const { session } = request
+    const extraWritable = this.extraWritable.filter(root => existsSync(root))
     return {
       mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
       workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot),
-      ...(this.extraWritable.length > 0 ? { extraWritable: this.extraWritable } : {}),
+      ...(extraWritable.length > 0 ? { extraWritable } : {}),
       ...session === undefined ? {} : { sessionId: session.id },
     }
   }

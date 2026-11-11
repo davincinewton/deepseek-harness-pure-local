@@ -80,42 +80,79 @@ describe('SandboxPolicyService', () => {
       expect(ctx.sandboxPolicy.extraWritable).toEqual([])
       expect(ctx.sandboxPolicy.resolve()).not.toHaveProperty('extraWritable')
     })
+
+    // The allow-set must reach backends grantable: the Landlock launcher
+    // opens every rule path and fails closed on a missing one (the host bug
+    // this pins: a default table entry like ~/.cargo on a host without Rust
+    // made every confined command refuse to start).
+    it('resolve() grants only the allow-set roots that exist on this host', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'dsh-policy-extra-'))
+      try {
+        const present = join(root, 'cache')
+        const absent = join(root, 'cargo')
+        mkdirSync(present)
+        const ctx = await mounted({ extraWritable: [absent, present] })
+        // The configured table is reported intact; only the resolved policy is filtered.
+        expect(ctx.sandboxPolicy.extraWritable).toEqual([resolve(canonicalPath(absent)), resolve(canonicalPath(present))])
+        expect(ctx.sandboxPolicy.resolve().extraWritable).toEqual([resolve(canonicalPath(present))])
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('resolve() omits the field when every allow-set root is absent', async () => {
+      const root = join(mkdtempSync(join(tmpdir(), 'dsh-policy-extra-gone-')), 'missing')
+      const ctx = await mounted({ extraWritable: [root] })
+      expect(ctx.sandboxPolicy.extraWritable).toHaveLength(1)
+      expect(ctx.sandboxPolicy.resolve()).not.toHaveProperty('extraWritable')
+    })
   })
 
   it('resolves the deployment policy for an agentless call', async () => {
-    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
-    expect(ctx.sandboxPolicy.resolve()).toEqual({
-      mode: 'workspace-write',
-      workspaceRoot: resolve('/fallback'),
-      extraWritable: ctx.sandboxPolicy.extraWritable,
-    })
+    const root = mkdtempSync(join(tmpdir(), 'dsh-policy-agentless-'))
+    try {
+      const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', extraWritable: [root] })
+      expect(ctx.sandboxPolicy.resolve()).toEqual({
+        mode: 'workspace-write',
+        workspaceRoot: resolve('/fallback'),
+        extraWritable: [resolve(canonicalPath(root))],
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('resolves each session mode and cwd together without changing the fallback', async () => {
-    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
-    const first = session('sess-first', '/projects/first')
-    const second = session('sess-second', '/projects/second')
-    setSandboxMode(second, 'danger-full-access')
+    const extra = mkdtempSync(join(tmpdir(), 'dsh-policy-session-extra-'))
+    try {
+      const expectedExtra = [resolve(canonicalPath(extra))]
+      const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', extraWritable: [extra] })
+      const first = session('sess-first', '/projects/first')
+      const second = session('sess-second', '/projects/second')
+      setSandboxMode(second, 'danger-full-access')
 
-    expect(ctx.sandboxPolicy.resolve({ session: first })).toEqual({
-      mode: 'workspace-write',
-      workspaceRoot: resolve('/projects/first'),
-      extraWritable: ctx.sandboxPolicy.extraWritable,
-      sessionId: 'sess-first',
-    })
-    expect(ctx.sandboxPolicy.resolve({ session: second })).toEqual({
-      mode: 'danger-full-access',
-      workspaceRoot: resolve('/projects/second'),
-      extraWritable: ctx.sandboxPolicy.extraWritable,
-      sessionId: 'sess-second',
-    })
-    expect(ctx.sandboxPolicy.overrideOf(first)).toBeUndefined()
-    expect(ctx.sandboxPolicy.overrideOf(second)).toBe('danger-full-access')
-    expect(ctx.sandboxPolicy.resolve()).toEqual({
-      mode: 'workspace-write',
-      workspaceRoot: resolve('/fallback'),
-      extraWritable: ctx.sandboxPolicy.extraWritable,
-    })
+      expect(ctx.sandboxPolicy.resolve({ session: first })).toEqual({
+        mode: 'workspace-write',
+        workspaceRoot: resolve('/projects/first'),
+        extraWritable: expectedExtra,
+        sessionId: 'sess-first',
+      })
+      expect(ctx.sandboxPolicy.resolve({ session: second })).toEqual({
+        mode: 'danger-full-access',
+        workspaceRoot: resolve('/projects/second'),
+        extraWritable: expectedExtra,
+        sessionId: 'sess-second',
+      })
+      expect(ctx.sandboxPolicy.overrideOf(first)).toBeUndefined()
+      expect(ctx.sandboxPolicy.overrideOf(second)).toBe('danger-full-access')
+      expect(ctx.sandboxPolicy.resolve()).toEqual({
+        mode: 'workspace-write',
+        workspaceRoot: resolve('/fallback'),
+        extraWritable: expectedExtra,
+      })
+    } finally {
+      rmSync(extra, { recursive: true, force: true })
+    }
   })
 
   it.skipIf(process.platform === 'win32')('resolves a symlink-sensitive session cwd with POSIX component semantics', async () => {
@@ -129,12 +166,11 @@ describe('SandboxPolicyService', () => {
       const link = join(lexical, 'link')
       symlinkSync(child, link, 'dir')
       const cwd = `${link}${sep}..`
-      const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+      const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', extraWritable: [] })
 
       expect(ctx.sandboxPolicy.resolve({ session: session('sess-symlink-parent', cwd) })).toEqual({
         mode: 'workspace-write',
         workspaceRoot: realpathSync.native(physical),
-        extraWritable: ctx.sandboxPolicy.extraWritable,
         sessionId: 'sess-symlink-parent',
       })
     } finally {
@@ -143,13 +179,12 @@ describe('SandboxPolicyService', () => {
   })
 
   it('lets an approved mode outrank the session mode while retaining its root', async () => {
-    const ctx = await mounted({ workspaceRoot: '/fallback' })
+    const ctx = await mounted({ workspaceRoot: '/fallback', extraWritable: [] })
     const active = session('sess-approved', '/projects/approved')
     setSandboxMode(active, 'workspace-write')
     expect(ctx.sandboxPolicy.resolve({ session: active, mode: 'danger-full-access' })).toEqual({
       mode: 'danger-full-access',
       workspaceRoot: resolve('/projects/approved'),
-      extraWritable: ctx.sandboxPolicy.extraWritable,
       sessionId: 'sess-approved',
     })
   })

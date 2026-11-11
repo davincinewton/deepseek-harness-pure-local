@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { mkdtempSync, realpathSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { CallId } from '@deepseek-ai/dsh-llm'
@@ -508,11 +508,15 @@ describe('per-call sandbox policy resolution', () => {
     expect(result.isError).toBe(false)
     // The policy's workspace root is the session cwd canonicalized by the
     // policy service (realpath + resolve), NEVER the web server's launch dir;
-    // the calling session's identity rides along for backend per-session state.
+    // the calling session's identity rides along for backend per-session
+    // state. The allow-set is stamped present-only (absent cache roots are
+    // ungrantable and never join the policy), and the field is omitted when
+    // nothing is present.
+    const presentExtra = ctx.sandboxPolicy.extraWritable.filter(root => existsSync(root))
     expect(bash.requests[0]?.sandboxPolicy).toEqual({
       mode: 'workspace-write',
       workspaceRoot: resolvePath(realpathSync.native(sessionCwd)),
-      extraWritable: ctx.sandboxPolicy.extraWritable,
+      ...(presentExtra.length > 0 ? { extraWritable: presentExtra } : {}),
       sessionId: 'policy-session',
     })
   })
@@ -520,10 +524,11 @@ describe('per-call sandbox policy resolution', () => {
   it('falls back to the deployment policy without an agent, and omits the field entirely without a confining executor', async () => {
     const { ctx, bash } = await setupSandboxed()
     await call(ctx, 'pwsh', { command: 'Write-Output hi', description: 'say hi' })
+    const presentExtra = ctx.sandboxPolicy.extraWritable.filter(root => existsSync(root))
     expect(bash.requests[0]?.sandboxPolicy).toEqual({
       mode: 'workspace-write',
       workspaceRoot: resolvePath(realpathSync.native(process.cwd())),
-      extraWritable: ctx.sandboxPolicy.extraWritable,
+      ...(presentExtra.length > 0 ? { extraWritable: presentExtra } : {}),
     })
 
     // The base FakeBash advertises no sandboxMode, so the tool must not stamp
