@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-browser'
 import { PuppeteerBrowserProvider } from './provider.ts'
+import { probeHostSandbox } from './host-sandbox.ts'
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647
 
@@ -20,8 +21,10 @@ export {
   PUPPETEER_PROVIDER_ID,
   PuppeteerBrowserProvider,
 } from './provider.ts'
-export type { PuppeteerProviderOptions } from './provider.ts'
+export type { ChromeSandboxPolicy, PuppeteerProviderOptions } from './provider.ts'
 export { DEFAULT_CACHE_DIR, findInstalledExecutable, provisionExecutable } from './provision.ts'
+export { APPARMOR_FIX_FILE, classifyHostSandbox, describeSandboxDenial, probeHostSandbox, sandboxFixGuidance } from './host-sandbox.ts'
+export type { HostSandboxProbe, HostSandboxStatus, SandboxDenialCause, SandboxKnobRead } from './host-sandbox.ts'
 export { assertNavigationTargetAllowed, isBlockedAddress, validateNavigateUrl } from './policy.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
@@ -48,8 +51,17 @@ export interface Config {
   executablePath?: string
   /** Chrome profile directory. Empty = an ephemeral per-process one, removed on dispose. */
   userDataDir?: string
-  /** Extra Chrome launch arguments (e.g. `--no-sandbox` in containers without user namespaces). */
+  /** Extra Chrome launch arguments (e.g. proxy flags; the sandbox posture is `chromeSandbox`). */
   chromeArgs?: string[]
+  /**
+   * Chrome sandbox posture. `auto` (default) launches sandboxed first and, on a
+   * host whose policy denies Chrome's sandbox, falls back to unsandboxed with
+   * one diagnosed notice carrying the host-side restore commands; `require`
+   * refuses to launch unsandboxed (fail-closed, `BROWSER_SANDBOX_UNAVAILABLE`);
+   * `off` launches unsandboxed immediately with no notice. Linux-only
+   * semantics: macOS and Windows grant Chrome's native sandbox unconditionally.
+   */
+  chromeSandbox?: string
   /**
    * Page user-agent to present. The default is a plain desktop Chrome agent
    * because search engines and most news sites bot-filter the headless
@@ -92,6 +104,7 @@ export const Config: z<Config> = z.object({
   executablePath: z.string().default(''),
   userDataDir: z.string().default(''),
   chromeArgs: z.array(z.string()).default([]),
+  chromeSandbox: z.string().default('auto'),
   userAgent: z.string().default('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'),
   viewportWidth: z.number().default(1280),
   viewportHeight: z.number().default(800),
@@ -145,6 +158,9 @@ export function apply(ctx: Context, config: Config): void {
   if (resolved.provision !== 'auto' && resolved.provision !== 'off') {
     throw new Error(`browser-puppeteer: provision must be 'auto' or 'off'; got ${JSON.stringify(resolved.provision)}`)
   }
+  if (resolved.chromeSandbox !== 'auto' && resolved.chromeSandbox !== 'require' && resolved.chromeSandbox !== 'off') {
+    throw new Error(`browser-puppeteer: chromeSandbox must be 'auto', 'require', or 'off'; got ${JSON.stringify(resolved.chromeSandbox)}`)
+  }
   const provider = new PuppeteerBrowserProvider({
     executablePath: resolved.executablePath,
     cacheDir: resolved.cacheDir,
@@ -152,6 +168,8 @@ export function apply(ctx: Context, config: Config): void {
     provision: resolved.provision,
     userDataDir: resolved.userDataDir,
     chromeArgs: resolved.chromeArgs,
+    chromeSandbox: resolved.chromeSandbox,
+    hostSandbox: probeHostSandbox,
     userAgent: resolved.userAgent,
     viewportWidth: resolved.viewportWidth,
     viewportHeight: resolved.viewportHeight,

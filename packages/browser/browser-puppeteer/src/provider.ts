@@ -39,9 +39,25 @@ import { assertNavigationTargetAllowed, validateNavigateUrl } from './policy.ts'
 import type { NavigationPolicyOptions } from './policy.ts'
 import { DEFAULT_CACHE_DIR, provisionExecutable } from './provision.ts'
 import type { ProvisionLog } from './provision.ts'
+import { describeSandboxDenial, sandboxFixGuidance } from './host-sandbox.ts'
+import type { HostSandboxProbe } from './host-sandbox.ts'
 
 /** Registry id of this provider kind. */
 export const PUPPETEER_PROVIDER_ID = 'puppeteer'
+
+/**
+ * Chrome sandbox posture. `auto` launches sandboxed first and falls back to
+ * unsandboxed with one diagnosed notice per provider; `require` refuses to
+ * run unsandboxed; `off` launches unsandboxed immediately without notice.
+ */
+export type ChromeSandboxPolicy = 'auto' | 'require' | 'off'
+
+/**
+ * Chrome launch arguments disabling its sandbox: `--no-sandbox` turns off the
+ * user-namespace sandbox, `--disable-setuid-sandbox` skips the legacy setuid
+ * helper probe (Chrome Headless Shell ships no such helper).
+ */
+const UNSANDBOXED_CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox']
 
 /**
  * Fixed launch posture, prepended to `chromeArgs`: drop the
@@ -65,6 +81,10 @@ export interface PuppeteerProviderOptions {
   /** Empty = an ephemeral per-process profile directory, removed on dispose. */
   readonly userDataDir: string
   readonly chromeArgs: readonly string[]
+  /** Chrome sandbox posture for every launch of this provider. */
+  readonly chromeSandbox: ChromeSandboxPolicy
+  /** Host verdict on whether OS policy denies Chrome's sandbox. */
+  readonly hostSandbox: HostSandboxProbe
   /** Page user-agent override; empty = the browser's own headless user agent. */
   readonly userAgent: string
   /** Page viewport width in CSS pixels. */
@@ -237,6 +257,8 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
   #usable = true
   #browser: Promise<PuppeteerBrowser> | undefined
   #profileDir: string | undefined
+  /** One sandbox-degradation notice per provider lifetime (boot notice or launch warning, never both). */
+  #sandboxAnnounced = false
   readonly #pages = new Map<BrowserPageKey, Page>()
   readonly #lastStatus = new WeakMap<Page, number>()
 
@@ -253,13 +275,20 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
    * operations that need the executable; `off` mode marks the provider
    * unusable when no executable exists. Every failure is reported through
    * `log` at boot, so the terminal already says the browser is unusable
-   * instead of waiting for the first operation to surface it.
+   * instead of waiting for the first operation to surface it. Once an
+   * executable is present, the host sandbox probe gets the same boot-time
+   * treatment: a host that denies Chrome its sandbox announces the diagnosed
+   * cause and restore commands here rather than at the first page load.
    */
   prewarm(): void {
-    void this.#ensureExecutable().catch((error: unknown) => {
-      this.#options.log?.(`browser: not available — ${error instanceof BrowserError ? error.message : String(error)}`)
-      if (this.#options.provision === 'off') this.#usable = false
-    })
+    void this.#ensureExecutable()
+      .then((executablePath) => {
+        this.#announceSandboxState(executablePath)
+      })
+      .catch((error: unknown) => {
+        this.#options.log?.(`browser: not available — ${error instanceof BrowserError ? error.message : String(error)}`)
+        if (this.#options.provision === 'off') this.#usable = false
+      })
   }
 
   available(): boolean {
@@ -604,13 +633,44 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
   }
 
   /**
-   * Launch Chrome Headless Shell. Hosts with unprivileged user namespaces
-   * disabled (AppArmor-restricted Ubuntu 23.10+, many containers) abort with
-   * "No usable sandbox!"; on that exact failure the launch retries once with
-   * `--no-sandbox` and warns, because a usable capability with a warned
-   * weaker sandbox beats a dead one. Every other launch failure propagates
-   * unchanged, and an explicit `--no-sandbox` in `chromeArgs` suppresses the
-   * retry path (the operator already chose it).
+   * Boot-time sandbox notice. When OS policy denies Chrome's sandbox and the
+   * configured posture would run unsandboxed (`auto`) or refuse (`require`),
+   * announce the diagnosed cause and the exact restore commands once, so the
+   * terminal states the browser's security posture at boot instead of at the
+   * first page load. `off` is a chosen posture: silent. The launch path below
+   * suppresses its own warning when this notice already ran.
+   */
+  #announceSandboxState(executablePath: string): void {
+    if (this.#options.chromeSandbox === 'off') return
+    const status = this.#options.hostSandbox(executablePath)
+    if (!status.denied) return
+    this.#sandboxAnnounced = true
+    const posture = this.#options.chromeSandbox === 'require'
+      ? 'chromeSandbox: "require" forbids an unsandboxed launch, so the browser will refuse to start until the sandbox is restored.'
+      : 'Pages will run WITHOUT Chrome\'s sandbox.'
+    const exit = this.#options.chromeSandbox === 'require'
+      ? "or run unsandboxed without further notices: set chromeSandbox: 'auto' or 'off' on the browser-puppeteer row."
+      : "or choose this posture without further notices: set chromeSandbox: 'off' on the browser-puppeteer row."
+    this.#options.log?.(
+      `browser: this host's policy blocks the user namespaces Chrome's sandbox needs (${describeSandboxDenial(status.cause)}). ${posture}\n`
+      // Restore commands print at column 0: one selected line pastes and runs as-is.
+      + `  to restore the sandbox:\n${sandboxFixGuidance(status.cause, executablePath)}\n`
+      + `  ${exit}`,
+    )
+  }
+
+  /**
+   * Launch Chrome Headless Shell under the configured `chromeSandbox` policy.
+   * `off` launches unsandboxed immediately — an explicit operator posture, so
+   * no sandboxed attempt is made and no notice is emitted. `auto` and
+   * `require` launch sandboxed first; hosts whose policy denies the sandbox
+   * (AppArmor-restricted Ubuntu, container ceilings) abort with
+   * "No usable sandbox!". `auto` then retries unsandboxed and warns once with
+   * the diagnosed cause unless the boot notice already announced it, because
+   * a usable capability with a warned weaker sandbox beats a dead one;
+   * `require` throws `BROWSER_SANDBOX_UNAVAILABLE` without retrying — the
+   * sandbox seam's fail-closed vocabulary for the seam that runs adversarial
+   * page content. Every other launch failure propagates unchanged.
    */
   async #launch(executablePath: string, userDataDir: string): Promise<PuppeteerBrowser> {
     const launch = (args: string[]): Promise<PuppeteerBrowser> => puppeteer.launch({
@@ -622,12 +682,33 @@ export class PuppeteerBrowserProvider implements BrowserProvider {
       args,
       protocolTimeout: this.#options.navigationTimeoutMs,
     })
+    if (this.#options.chromeSandbox === 'off') {
+      return launch([...BASE_CHROME_ARGS, ...this.#options.chromeArgs, ...UNSANDBOXED_CHROME_ARGS])
+    }
     try {
       return await launch([...BASE_CHROME_ARGS, ...this.#options.chromeArgs])
     } catch (error: unknown) {
-      if (!isSandboxUnavailable(error) || this.#options.chromeArgs.includes('--no-sandbox')) throw error
-      this.#options.log?.('browser: this host denies Chrome its sandbox ("No usable sandbox"); retrying with --no-sandbox — page content runs WITHOUT Chrome\'s sandbox; enabling unprivileged user namespaces restores it')
-      return launch([...BASE_CHROME_ARGS, ...this.#options.chromeArgs, '--no-sandbox', '--disable-setuid-sandbox'])
+      if (!isSandboxUnavailable(error)) throw error
+      const status = this.#options.hostSandbox(executablePath)
+      if (this.#options.chromeSandbox === 'require') {
+        throw new BrowserError(
+          `this host denies Chrome's sandbox${status.denied ? ` (${describeSandboxDenial(status.cause)})` : ''}; `
+          + 'chromeSandbox: "require" refuses an unsandboxed launch — restore the sandbox (the boot notice prints the commands) or choose "auto"/"off"',
+          'BROWSER_SANDBOX_UNAVAILABLE',
+          { cause: error },
+        )
+      }
+      if (!this.#sandboxAnnounced) {
+        this.#sandboxAnnounced = true
+        this.#options.log?.(
+          `browser: this host denied Chrome's sandbox (No usable sandbox${status.denied ? `; ${describeSandboxDenial(status.cause)}` : ''}) `
+          + "— retrying with --no-sandbox, page content runs WITHOUT Chrome's sandbox.\n"
+          + (status.denied
+            ? `  to restore the sandbox:\n${sandboxFixGuidance(status.cause, executablePath)}`
+            : '  enabling unprivileged user namespaces restores it'),
+        )
+      }
+      return launch([...BASE_CHROME_ARGS, ...this.#options.chromeArgs, ...UNSANDBOXED_CHROME_ARGS])
     }
   }
 

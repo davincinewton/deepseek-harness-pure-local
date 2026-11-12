@@ -77,6 +77,8 @@ function providerOptions(overrides: Partial<import('@deepseek-ai/dsh-browser-pup
     provision: 'off',
     userDataDir: '',
     chromeArgs: [],
+    chromeSandbox: 'auto',
+    hostSandbox: () => ({ denied: false }),
     userAgent: '',
     viewportWidth: 1280,
     viewportHeight: 800,
@@ -695,12 +697,15 @@ describe('PuppeteerBrowserProvider lifecycle', () => {
     await rm(kept, { recursive: true, force: true })
   })
 
-  it('retries a sandbox-denied launch once with --no-sandbox and warns', async () => {
+  it('retries a sandbox-denied launch once with --no-sandbox and warns with the diagnosed cause', async () => {
     const logs: string[] = []
     launchMock
       .mockRejectedValueOnce(new Error('Failed to launch the browser process: Code: null\nstderr:\nFATAL:...zygote_host_impl_linux.cc No usable sandbox!\n'))
       .mockImplementationOnce(async () => browser)
-    const provider = new PuppeteerBrowserProvider(providerOptions({ log: message => logs.push(message) }))
+    const provider = new PuppeteerBrowserProvider(providerOptions({
+      log: message => logs.push(message),
+      hostSandbox: () => ({ denied: true, cause: 'apparmor-restricted-userns' }),
+    }))
     await expect(provider.navigate(pageKey, { url: 'https://example.com' })).resolves.toMatchObject({ statusCode: 200 })
     expect(launchMock).toHaveBeenCalledTimes(2)
     const firstArgs = (launchMock.mock.calls[0]![0] as { args: string[] }).args
@@ -710,23 +715,107 @@ describe('PuppeteerBrowserProvider lifecycle', () => {
     expect(retryArgs).toContain('--disable-setuid-sandbox')
     expect(retryArgs).toContain('--disable-blink-features=AutomationControlled')
     expect(logs.join('\n')).toContain('WITHOUT Chrome')
+    expect(logs.join('\n')).toContain('apparmor_restrict_unprivileged_userns')
+    expect(logs.join('\n')).toContain('apparmor_parser')
     await provider.dispose()
   })
 
-  it('does not retry when the operator already set --no-sandbox, and rethrows other launch failures', async () => {
+  it('warns generically when the launch denial has no classified host cause', async () => {
+    const logs: string[] = []
+    launchMock
+      .mockRejectedValueOnce(new Error('No usable sandbox!'))
+      .mockImplementationOnce(async () => browser)
+    const provider = new PuppeteerBrowserProvider(providerOptions({ log: message => logs.push(message) }))
+    await provider.navigate(pageKey, { url: 'https://example.com' })
+    expect(logs.join('\n')).toContain('WITHOUT Chrome')
+    expect(logs.join('\n')).toContain('enabling unprivileged user namespaces')
+    await provider.dispose()
+  })
+
+  it('launches unsandboxed immediately under chromeSandbox: "off", with no sandboxed attempt or notice', async () => {
+    const logs: string[] = []
+    const provider = new PuppeteerBrowserProvider(providerOptions({
+      chromeSandbox: 'off',
+      log: message => logs.push(message),
+      hostSandbox: () => ({ denied: true, cause: 'apparmor-restricted-userns' }),
+    }))
+    provider.prewarm()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await expect(provider.navigate(pageKey, { url: 'https://example.com' })).resolves.toMatchObject({ statusCode: 200 })
+    expect(launchMock).toHaveBeenCalledTimes(1)
+    const args = (launchMock.mock.calls[0]![0] as { args: string[] }).args
+    expect(args).toContain('--no-sandbox')
+    expect(args).toContain('--disable-setuid-sandbox')
+    expect(logs).toEqual([])
+    await provider.dispose()
+  })
+
+  it('refuses an unsandboxed launch under chromeSandbox: "require" without retrying', async () => {
+    launchMock.mockRejectedValueOnce(new Error('FATAL:...zygote_host_impl_linux.cc No usable sandbox!'))
+    const provider = new PuppeteerBrowserProvider(providerOptions({
+      chromeSandbox: 'require',
+      hostSandbox: () => ({ denied: true, cause: 'userns-sysctl-disabled' }),
+    }))
+    await expect(provider.navigate(pageKey, { url: 'https://example.com' }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_SANDBOX_UNAVAILABLE' }))
+    expect(launchMock).toHaveBeenCalledTimes(1)
+    await provider.dispose()
+
+    // A denial the probe could not classify still refuses, without a cause clause.
     launchMock.mockRejectedValueOnce(new Error('No usable sandbox!'))
-    const provider = new PuppeteerBrowserProvider(providerOptions({ chromeArgs: ['--no-sandbox'] }))
+    const unclassified = new PuppeteerBrowserProvider(providerOptions({ chromeSandbox: 'require' }))
+    await expect(unclassified.navigate(pageKey, { url: 'https://example.com' }))
+      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_SANDBOX_UNAVAILABLE' }))
+    expect(launchMock).toHaveBeenCalledTimes(2)
+    await unclassified.dispose()
+  })
+
+  it('announces a denied host sandbox at boot and adds no second notice at launch', async () => {
+    const logs: string[] = []
+    const provider = new PuppeteerBrowserProvider(providerOptions({
+      log: message => logs.push(message),
+      hostSandbox: () => ({ denied: true, cause: 'apparmor-restricted-userns' }),
+    }))
+    provider.prewarm()
+    await vi.waitFor(() => { expect(logs.join('\n')).toContain('to restore the sandbox') })
+    expect(logs.join('\n')).toContain("Pages will run WITHOUT Chrome's sandbox")
+    expect(logs.join('\n')).toContain("chromeSandbox: 'off'")
+    launchMock
+      .mockRejectedValueOnce(new Error('No usable sandbox!'))
+      .mockImplementationOnce(async () => browser)
+    await provider.navigate(pageKey, { url: 'https://example.com' })
+    // The launch fallback stays silent: the boot notice already told the operator.
+    expect(logs.filter(message => message.includes('WITHOUT Chrome'))).toHaveLength(1)
+    await provider.dispose()
+  })
+
+  it('announces refusal at boot under chromeSandbox: "require" and stays silent when the host grants the sandbox', async () => {
+    const refused: string[] = []
+    const denied = new PuppeteerBrowserProvider(providerOptions({
+      chromeSandbox: 'require',
+      log: message => refused.push(message),
+      hostSandbox: () => ({ denied: true, cause: 'userns-sysctl-disabled' }),
+    }))
+    denied.prewarm()
+    await vi.waitFor(() => { expect(refused.join('\n')).toContain('refuse to start') })
+    expect(refused.join('\n')).toContain('kernel.unprivileged_userns_clone=0')
+    await denied.dispose()
+
+    const quiet: string[] = []
+    const healthy = new PuppeteerBrowserProvider(providerOptions({ log: message => quiet.push(message) }))
+    healthy.prewarm()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(quiet).toEqual([])
+    await healthy.dispose()
+  })
+
+  it('rethrows other launch failures', async () => {
+    launchMock.mockRejectedValueOnce(new Error('executable does not exist'))
+    const provider = new PuppeteerBrowserProvider(providerOptions())
     await expect(provider.navigate(pageKey, { url: 'https://example.com' }))
       .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
     expect(launchMock).toHaveBeenCalledTimes(1)
     await provider.dispose()
-
-    launchMock.mockRejectedValueOnce(new Error('executable does not exist'))
-    const other = new PuppeteerBrowserProvider(providerOptions())
-    await expect(other.navigate(pageKey, { url: 'https://example.com' }))
-      .rejects.toThrow(expect.objectContaining({ code: 'BROWSER_PROVIDER_ERROR' }))
-    expect(launchMock).toHaveBeenCalledTimes(2)
-    await other.dispose()
   })
 
   it('cancels an in-flight operation when the caller signal aborts', async () => {
@@ -882,6 +971,13 @@ describe('plugin registration (real seam)', () => {
     await ctx.plugin(BrowserRuntime, {})
     await expect(ctx.plugin(plugin, { provision: 'sometimes' }))
       .rejects.toThrow(/provision must be 'auto' or 'off'/)
+  })
+
+  it('rejects an invalid chromeSandbox value at config validation', async () => {
+    const ctx = new Context()
+    await ctx.plugin(BrowserRuntime, {})
+    await expect(ctx.plugin(plugin, { chromeSandbox: 'sometimes' }))
+      .rejects.toThrow(/chromeSandbox must be 'auto', 'require', or 'off'/)
   })
 
   it('rejects non-positive budgets at config validation', async () => {
