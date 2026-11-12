@@ -16,6 +16,7 @@
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import type { SandboxExecutionPolicy } from './index.ts'
+import { isPathUnder } from './containment.ts'
 
 /**
  * Resolve a granted root to the path the enforcement layer actually compares:
@@ -54,21 +55,21 @@ export function canonicalPath(path: string): string {
 /**
  * Whether one canonicalized path sits under a writable root of `policy` —
  * the containment the tool layer prompts on BEFORE the fence (the prompt
- * decision must not wait for a denial). Case-insensitive on win32 like the
- * fence's containment; the fence remains the enforcement, this is the
+ * decision must not wait for a denial). This is the fence's own containment
+ * test ({@link isPathUnder}: platform-separator lexical fast path with a
+ * filesystem-identity fallback), so the prompt never fires for an access the
+ * fence would have allowed; the fence remains the enforcement, this is the
  * prompt trigger.
  * @param policy - the resolved file-effect policy.
  * @param path - the canonicalized target path to test.
  * @returns true when the path is contained (no prompt needed).
  */
-export function isWithinWritable(policy: SandboxExecutionPolicy, path: string): boolean {
+export async function isWithinWritable(policy: SandboxExecutionPolicy, path: string): Promise<boolean> {
   if (policy.mode !== 'workspace-write') return true
-  const fold = process.platform === 'win32' ? path.toLowerCase() : path
-  return writableRoots(policy).some((root) => {
-    const base = process.platform === 'win32' ? root.toLowerCase() : root
-    const prefix = base.endsWith('/') || base.endsWith(String.fromCharCode(92)) ? base : `${base}/`
-    return fold === base || fold.startsWith(prefix)
-  })
+  for (const root of writableRoots(policy)) {
+    if (await isPathUnder(path, root)) return true
+  }
+  return false
 }
 
 export function writableRoots(policy: SandboxExecutionPolicy): string[] {

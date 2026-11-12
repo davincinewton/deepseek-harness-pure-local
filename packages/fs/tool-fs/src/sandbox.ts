@@ -72,7 +72,7 @@ export class FsSandboxController {
     policy: SandboxExecutionPolicy | undefined,
     exec: ToolExecution,
   ): Promise<SandboxExecutionPolicy | undefined> {
-    if (policy === undefined || isWithinWritable(policy, path)) return policy
+    if (policy === undefined || (await isWithinWritable(policy, path))) return policy
     const answer: GateAnswer = await this.ask(toolName, verb, path, exec)
     // Both allow answers run THIS call unconfined; the full-access answer
     // additionally recorded the durable session switch inside ask().
@@ -90,7 +90,7 @@ export class FsSandboxController {
    */
   async gateRead(toolName: string, path: string, exec: ToolExecution): Promise<void> {
     const policy = this.standingPolicy(exec)
-    if (policy === undefined || isWithinWritable(policy, path)) return
+    if (policy === undefined || (await isWithinWritable(policy, path))) return
     await this.ask(toolName, 'read', path, exec)
   }
 
